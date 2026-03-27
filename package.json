@@ -1,0 +1,25 @@
+{
+  "name": "@0xsplits/cli",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "splits": "./dist/cli.js"
+  },
+  "scripts": {
+    "dev": "tsx src/cli.ts",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "incur": "^0.3.13"
+  },
+  "pnpm": {
+    "overrides": {
+      "@modelcontextprotocol/sdk": "1.27.1"
+    }
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0",
+    "typescript": "latest"
+  }
+}
