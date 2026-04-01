@@ -51,12 +51,17 @@ transactions.command("list", {
       .default(50)
       .describe("Max results to return"),
     account: z.string().optional().describe("Filter by account address"),
+    cursor: z
+      .string()
+      .optional()
+      .describe("Pagination cursor from a previous response"),
   }),
   async run({ env, options }) {
     const params = new URLSearchParams();
     if (options.chainId) params.set("chainId", String(options.chainId));
     if (options.limit) params.set("limit", String(options.limit));
     if (options.account) params.set("account", options.account);
+    if (options.cursor) params.set("cursor", options.cursor);
     const query = params.toString();
     return apiRequest(env, `/transactions${query ? `?${query}` : ""}`);
   },
