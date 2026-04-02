@@ -1,4 +1,4 @@
-# @0xsplits/cli
+# @splits/cli
 
 CLI and MCP server for the Splits platform. Built with [incur](https://github.com/wevm/incur).
 
