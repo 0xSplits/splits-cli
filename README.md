@@ -1,50 +1,75 @@
-# @splits/cli
+# @splits/splits-cli
 
-CLI and MCP server for the Splits platform. Built with [incur](https://github.com/wevm/incur).
+CLI and MCP server for the [Splits](https://splits.org) platform.
 
-## Setup
+## Install
 
-```bash
-pnpm install
+```sh
+npm install -g @splits/splits-cli
+```
+
+This makes the `splits` command available globally.
+
+Alternatively, run without installing:
+
+```sh
+npx @splits/splits-cli <command>
+```
+
+## Authentication
+
+Get an API key from [Teams Settings](https://teams.splits.org/settings/team/api-keys/) and set it as an environment variable:
+
+```sh
+export SPLITS_API_KEY=sk_read_...
 ```
 
 ## Usage
 
-### CLI
+### Transactions
 
-```bash
-# Set your API key
-export SPLITS_API_KEY="<your_api_key>"
-export SPLITS_API_URL="http://localhost:8080"
-
-# List accounts
-pnpm dev accounts list
-
+```sh
 # List transactions
-pnpm dev transactions list --limit 5
+splits transactions list
+splits transactions list --chainId 1 --limit 100
+splits transactions list --account 0x... --cursor <cursor>
 
-# Filter transactions by account address
-pnpm dev transactions list --account 0xYourAddress --limit 10
-
-# Get transaction details
-pnpm dev transactions get <transaction_id>
-
-# JSON output
-pnpm dev transactions list --json
+# Get a specific transaction
+splits transactions get <id>
 ```
 
-### MCP Server
+### Accounts
 
-Register with Claude Code:
+```sh
+# List accounts
+splits accounts list
+splits accounts list --includeArchived
 
-```bash
-claude mcp add splits -- pnpm tsx /Users/willdrach/Git/splits-workspace/splits-cli/src/cli.ts --mcp
+# Get account details
+splits accounts get <address>
+```
+
+## MCP Server (Claude Code)
+
+Register the CLI as an MCP server so Claude can use Splits tools directly:
+
+```sh
+# Using the built-in command (auto-detects Claude Code, Cursor, etc.)
+splits mcp add
+
+# Or manually with Claude Code
+claude mcp add splits -e SPLITS_API_KEY=sk_read_... -- npx @splits/splits-cli --mcp
 ```
 
 The MCP server exposes these tools:
-- `accounts_list` — List accounts in your org
-- `accounts_get` — Get account details by address
 - `transactions_list` — List transactions for your org
 - `transactions_get` — Get transaction details
+- `accounts_list` — List accounts in your org
+- `accounts_get` — Get account details by address
 
-**Note:** `SPLITS_API_KEY` and `SPLITS_API_URL` environment variables must be set for the MCP server process. You can configure these in your Claude Code MCP settings.
+## Configuration
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `SPLITS_API_KEY` | Yes | API key from [Teams Settings](https://teams.splits.org/settings/team/api-keys/) |
+| `SPLITS_API_URL` | No | Override the API base URL (defaults to production) |

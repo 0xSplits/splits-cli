@@ -12,7 +12,7 @@ const authEnv = z.object({
     .describe("Splits API key (sk_read_... or legacy hex key)"),
   SPLITS_API_URL: z
     .string()
-    .default("http://localhost:8080")
+    .default("https://server.production.splits.org/api")
     .describe("Splits API base URL"),
 });
 
