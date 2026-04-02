@@ -1,13 +1,19 @@
 {
   "name": "@splits/splits-cli",
   "version": "0.0.1",
+  "description": "CLI and MCP server for the Splits platform",
   "type": "module",
   "bin": {
     "splits": "./dist/cli.js"
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "dev": "tsx src/cli.ts",
-    "build": "tsc"
+    "build": "tsc",
+    "prepublishOnly": "pnpm build",
+    "release": "npm version patch && pnpm publish --access public"
   },
   "dependencies": {
     "incur": "^0.3.13"
