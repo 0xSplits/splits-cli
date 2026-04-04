@@ -20,7 +20,10 @@ const authEnv = z.object({
 async function apiRequest(
   env: { SPLITS_API_KEY: string; SPLITS_API_URL: string },
   path: string,
-  options?: { method?: string; body?: unknown },
+  options?: {
+    method?: "GET" | "PUT" | "POST" | "DELETE";
+    body?: Record<string, unknown>;
+  },
 ) {
   const res = await fetch(`${env.SPLITS_API_URL}/public/v1${path}`, {
     method: options?.method ?? "GET",
@@ -45,6 +48,7 @@ function buildQuery(
   params: Record<string, string | number | boolean | undefined>,
 ): string {
   const searchParams = new URLSearchParams();
+  // Skip undefined and false — boolean flags are only sent when truthy
   for (const [key, value] of Object.entries(params)) {
     if (value !== undefined && value !== false) {
       searchParams.set(key, String(value));
@@ -92,7 +96,7 @@ accounts.command("list", {
   async run({ env, options }) {
     return apiRequest(
       env,
-      `/org/accounts${buildQuery({ includeArchived: options.includeArchived || undefined })}`,
+      `/org/accounts${buildQuery({ includeArchived: options.includeArchived })}`,
     );
   },
 });
@@ -101,7 +105,10 @@ accounts.command("get", {
   description: "Get account details by address",
   env: authEnv,
   args: z.object({
-    address: z.string().describe("Account address (0x...)"),
+    address: z
+      .string()
+      .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid Ethereum address")
+      .describe("Account address (0x...)"),
   }),
   async run({ env, args }) {
     return apiRequest(env, `/org/accounts/${args.address}`);
@@ -112,7 +119,10 @@ accounts.command("balances", {
   description: "Get token balances for an account",
   env: authEnv,
   args: z.object({
-    address: z.string().describe("Account address (0x...)"),
+    address: z
+      .string()
+      .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid Ethereum address")
+      .describe("Account address (0x...)"),
   }),
   options: z.object({
     chainIds: z
@@ -132,7 +142,10 @@ accounts.command("chains", {
   description: "List chains an account is deployed/synced on",
   env: authEnv,
   args: z.object({
-    address: z.string().describe("Account address (0x...)"),
+    address: z
+      .string()
+      .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid Ethereum address")
+      .describe("Account address (0x...)"),
   }),
   async run({ env, args }) {
     return apiRequest(env, `/org/accounts/${args.address}/chains`);
@@ -183,7 +196,7 @@ transactions.command("get", {
   description: "Get details for a specific transaction",
   env: authEnv,
   args: z.object({
-    id: z.string().describe("Transaction ID"),
+    id: z.string().uuid("Invalid transaction ID").describe("Transaction ID"),
   }),
   async run({ env, args }) {
     return apiRequest(env, `/transactions/${args.id}`);
@@ -191,10 +204,10 @@ transactions.command("get", {
 });
 
 transactions.command("memo", {
-  description: "Update the memo on a transaction",
+  description: "Set or clear the memo on a transaction",
   env: authEnv,
   args: z.object({
-    id: z.string().describe("Transaction ID"),
+    id: z.string().uuid("Invalid transaction ID").describe("Transaction ID"),
   }),
   options: z.object({
     memo: z
