@@ -21,7 +21,7 @@ npx @splits/splits-cli <command>
 Get an API key from [Teams Settings](https://teams.splits.org/settings/team/api-keys/) and set it as an environment variable:
 
 ```sh
-export SPLITS_API_KEY=sk_read_...
+export SPLITS_API_KEY=sk_...
 ```
 
 ## Usage
