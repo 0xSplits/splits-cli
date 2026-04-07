@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { Cli, z } from "incur";
 
 const cli = Cli.create("splits", {
