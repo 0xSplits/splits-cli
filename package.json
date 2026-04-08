@@ -1,6 +1,6 @@
 {
   "name": "@splits/splits-cli",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "CLI and MCP server for the Splits platform",
   "type": "module",
   "bin": {
@@ -23,6 +23,19 @@
       "@modelcontextprotocol/sdk": "1.27.1"
     }
   },
+  "homepage": "https://splits.org",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/0xSplits/splits-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/0xSplits/splits-cli/issues"
+  },
+  "keywords": [
+    "splits",
+    "CLI",
+    "MCP"
+  ],
   "devDependencies": {
     "@types/node": "^25.5.0",
     "tsx": "^4.21.0",
