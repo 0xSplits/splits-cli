@@ -123,7 +123,8 @@ accounts.command("balances", {
     address: z
       .string()
       .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid Ethereum address")
-      .describe("Account address (0x...)"),
+      .optional()
+      .describe("Account address (0x...). Auto-selected if org has one account."),
   }),
   options: z.object({
     chainIds: z
@@ -132,9 +133,22 @@ accounts.command("balances", {
       .describe("Comma-separated chain IDs to filter (e.g. 1,8453)"),
   }),
   async run({ env, args, options }) {
+    let address = args.address;
+    if (!address) {
+      const result = (await apiRequest(env, "/org/accounts")) as {
+        data: Array<{ address: string }>;
+      };
+      if (result.data.length === 1) {
+        address = result.data[0].address;
+      } else {
+        throw new Error(
+          `Multiple accounts found. Specify an address: ${result.data.map((a) => a.address).join(", ")}`,
+        );
+      }
+    }
     return apiRequest(
       env,
-      `/org/accounts/${args.address}/balances${buildQuery({ chainIds: options.chainIds })}`,
+      `/org/accounts/${address}/balances${buildQuery({ chainIds: options.chainIds })}`,
     );
   },
 });
