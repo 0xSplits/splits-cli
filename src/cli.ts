@@ -238,6 +238,19 @@ transactions.command("memo", {
   },
 });
 
+transactions.command("refresh-gas", {
+  description: "Refresh gas estimates for an existing transaction",
+  env: authEnv,
+  options: z.object({
+    id: z.string().uuid("Invalid transaction ID").describe("Transaction ID"),
+  }),
+  async run({ env, options }) {
+    return apiRequest(env, `/transactions/${options.id}/refresh-gas`, {
+      method: "PUT",
+    });
+  },
+});
+
 cli.command(transactions);
 
 // =============================================================================
