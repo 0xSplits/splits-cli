@@ -38,8 +38,10 @@ splits transactions list --account 0x... --cursor <cursor>
 splits transactions get <id>
 
 # Refresh gas estimates for an existing transaction
-splits transactions refresh-gas --id <id>
+splits transactions refresh-gas <id>
 ```
+
+For multisig transactions, gas can only be refreshed when exactly one signer remains.
 
 ### Accounts
 
