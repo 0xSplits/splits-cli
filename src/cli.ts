@@ -238,15 +238,15 @@ transactions.command("memo", {
   },
 });
 
-transactions.command("refresh-gas", {
+transactions.command("update-gas-estimation", {
   description:
-    "Refresh gas estimates for an existing transaction. For multisig, run this when one signer remains.",
+    "Update gas estimates for an existing transaction. For multisig, run this when one signer remains.",
   env: authEnv,
   args: z.object({
     id: z.string().uuid("Invalid transaction ID").describe("Transaction ID"),
   }),
   async run({ env, args }) {
-    return apiRequest(env, `/transactions/${args.id}/refresh-gas`, {
+    return apiRequest(env, `/transactions/${args.id}/update_gas_estimation`, {
       method: "PUT",
     });
   },

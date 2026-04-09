@@ -46,7 +46,7 @@ The entire CLI lives in a single file: `src/cli.ts`. This is intentional — do 
 - Keep top-level groups aligned with backend resources: `accounts`, `transactions`, `contacts`, `tokens`, `chains`, `members`, `settings`, `automations`.
 - Use positional `args` for the primary identifier of single-resource commands; reserve `options` for filters, toggles, and mutation payloads.
 - Keep option names aligned with backend query/body field names to reduce translation overhead.
-- When a backend route has an important eligibility constraint (e.g. `transactions refresh-gas` only works with one signer remaining), include it in the command description and README example.
+- When a backend route has an important eligibility constraint (e.g. `transactions update-gas-estimation` only works with one signer remaining), include it in the command description and README example.
 - When a command targets a single resource and the org only has one of them (see `accounts balances`), auto-select it rather than requiring the address, and throw a clear error listing the options when there are multiple.
 - Don't force every command into the same shape — predictable names, bounded output, actionable errors, and structured returns matter more than uniformity.
 
