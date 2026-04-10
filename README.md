@@ -69,7 +69,7 @@ claude mcp add splits -e SPLITS_API_KEY=sk_read_... -- npx @splits/splits-cli --
 The MCP server exposes these tools:
 - `transactions_list` — List transactions for your org
 - `transactions_get` — Get transaction details
-- `transactions_refresh_gas` — Refresh gas estimates for an existing transaction
+- `transactions_update_gas_estimation` — Update gas estimates for an existing transaction
 - `accounts_list` — List accounts in your org
 - `accounts_get` — Get account details by address
 
