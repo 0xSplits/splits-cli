@@ -1,6 +1,6 @@
 {
   "name": "@splits/splits-cli",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "CLI and MCP server for the Splits platform",
   "type": "module",
   "bin": {
