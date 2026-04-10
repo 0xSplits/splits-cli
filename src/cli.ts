@@ -124,7 +124,9 @@ accounts.command("balances", {
       .string()
       .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid Ethereum address")
       .optional()
-      .describe("Account address (0x...). Auto-selected if org has one account."),
+      .describe(
+        "Account address (0x...). Auto-selected if org has one account.",
+      ),
   }),
   options: z.object({
     chainIds: z
@@ -234,6 +236,184 @@ transactions.command("memo", {
     return apiRequest(env, `/transactions/${args.id}`, {
       method: "PUT",
       body: { memo: options.memo },
+    });
+  },
+});
+
+// -----------------------------------------------------------------------------
+// transactions create (subgroup)
+// -----------------------------------------------------------------------------
+
+const create = Cli.create("create", {
+  description: "Create transaction proposals",
+});
+
+create.command("transfer", {
+  description:
+    "Create a token transfer proposal from a smart account. Specify amount in human-readable units (e.g. '100' for 100 USDC). Returns the proposal with gas estimates.",
+  env: authEnv,
+  options: z.object({
+    account: z
+      .string()
+      .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid Ethereum address")
+      .describe(
+        "The smart account address to create the proposal from (0x-prefixed, 40 hex chars)",
+      ),
+    chainId: z
+      .number()
+      .describe(
+        "The chain ID where the smart account is deployed (e.g., 1 for Ethereum, 8453 for Base)",
+      ),
+    recipient: z
+      .string()
+      .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid Ethereum address")
+      .describe(
+        "The recipient address for the transfer (0x-prefixed, 40 hex chars, cannot be zero address)",
+      ),
+    token: z
+      .string()
+      .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid token address")
+      .describe(
+        "The token contract address to transfer (use 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE for native ETH)",
+      ),
+    amount: z
+      .string()
+      .regex(
+        /^(0|[1-9]\d*)(\.\d+)?$/,
+        "Must be a positive decimal number (no scientific notation, no negatives, no leading zeros)",
+      )
+      .describe(
+        "The amount to transfer in human-readable units (e.g., '100' for 100 USDC, '0.5' for 0.5 ETH)",
+      ),
+    memo: z
+      .string()
+      .max(500)
+      .optional()
+      .describe("Optional memo for the transaction (max 500 chars)"),
+    name: z
+      .string()
+      .max(200)
+      .optional()
+      .describe(
+        "Optional name for the proposal. If omitted, auto-generated from transfer details",
+      ),
+    validUntil: z
+      .number()
+      .optional()
+      .describe(
+        "Unix timestamp (seconds) when the proposal expires. Defaults to 7 days from now. Must be in the future and at most 30 days out.",
+      ),
+  }),
+  async run({ env, options }) {
+    const body: Record<string, unknown> = {
+      account: options.account,
+      chainId: options.chainId,
+      recipient: options.recipient,
+      token: options.token,
+      amount: options.amount,
+    };
+    if (options.memo !== undefined) body.memo = options.memo;
+    if (options.name !== undefined) body.name = options.name;
+    if (options.validUntil !== undefined) body.validUntil = options.validUntil;
+    return apiRequest(env, "/proposals/transfer", {
+      method: "POST",
+      body,
+    });
+  },
+});
+
+create.command("custom", {
+  description:
+    "Create a transaction proposal with raw EVM calls. Use for any on-chain action including contract interactions, approvals, and swaps.",
+  env: authEnv,
+  options: z.object({
+    account: z
+      .string()
+      .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid Ethereum address")
+      .describe(
+        "The smart account address to create the proposal from (0x-prefixed, 40 hex chars)",
+      ),
+    chainId: z
+      .number()
+      .describe(
+        "The chain ID where the smart account is deployed (e.g., 1 for Ethereum, 8453 for Base)",
+      ),
+    calls: z
+      .array(
+        z.object({
+          to: z
+            .string()
+            .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid address")
+            .describe("Target contract address (0x-prefixed, 40 hex chars)"),
+          data: z
+            .string()
+            .regex(/^0x[a-fA-F0-9]*$/, "Invalid hex calldata")
+            .describe("Hex-encoded calldata (0x-prefixed)"),
+          value: z
+            .string()
+            .default("0")
+            .describe("Value in wei as a string (defaults to '0')"),
+        }),
+      )
+      .min(1)
+      .max(20)
+      .describe(
+        "Array of raw EVM calls to execute. Each call has 'to' (address), 'data' (hex calldata), and optional 'value' (wei as string)",
+      ),
+    memo: z
+      .string()
+      .max(500)
+      .optional()
+      .describe("Optional memo for the transaction (max 500 chars)"),
+    name: z
+      .string()
+      .max(200)
+      .optional()
+      .describe(
+        "Optional name for the proposal. If omitted, auto-generated from call details",
+      ),
+    validUntil: z
+      .number()
+      .optional()
+      .describe(
+        "Unix timestamp (seconds) when the proposal expires. Defaults to 7 days from now. Must be in the future and at most 30 days out.",
+      ),
+  }),
+  async run({ env, options }) {
+    const body: Record<string, unknown> = {
+      account: options.account,
+      chainId: options.chainId,
+      calls: options.calls,
+    };
+    if (options.memo !== undefined) body.memo = options.memo;
+    if (options.name !== undefined) body.name = options.name;
+    if (options.validUntil !== undefined) body.validUntil = options.validUntil;
+    return apiRequest(env, "/proposals/custom", {
+      method: "POST",
+      body,
+    });
+  },
+});
+
+transactions.command(create);
+
+// -----------------------------------------------------------------------------
+// transactions cancel
+// -----------------------------------------------------------------------------
+
+transactions.command("cancel", {
+  description:
+    "Cancel a pending transaction proposal. Only works on proposals in CREATED or DRAFTED status.",
+  env: authEnv,
+  args: z.object({
+    id: z
+      .string()
+      .uuid("Invalid transaction ID")
+      .describe("The proposal ID to cancel"),
+  }),
+  async run({ env, args }) {
+    return apiRequest(env, `/proposals/${args.id}`, {
+      method: "DELETE",
     });
   },
 });
