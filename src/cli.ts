@@ -240,6 +240,20 @@ transactions.command("memo", {
   },
 });
 
+transactions.command("update-gas-estimation", {
+  description:
+    "Update gas estimates for an existing transaction. For multisig, run this when one signer remains.",
+  env: authEnv,
+  args: z.object({
+    id: z.string().uuid("Invalid transaction ID").describe("Transaction ID"),
+  }),
+  async run({ env, args }) {
+    return apiRequest(env, `/transactions/${args.id}/update_gas_estimation`, {
+      method: "PUT",
+    });
+  },
+});
+
 // -----------------------------------------------------------------------------
 // transactions create (subgroup)
 // -----------------------------------------------------------------------------
