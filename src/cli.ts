@@ -230,6 +230,60 @@ accounts.command("rename", {
   },
 });
 
+accounts.command("create", {
+  description:
+    "Create a new subaccount with specified signers and threshold. " +
+    "Use 'members signers <userId>' to discover passkey IDs. Requires owner-scoped API key.",
+  env: authEnv,
+  options: z.object({
+    name: z.string().min(1).max(255).describe("Account name (max 255 chars)"),
+    passkeyIds: z
+      .string()
+      .optional()
+      .describe(
+        "Comma-separated passkey IDs from 'members signers' (e.g. id1,id2)",
+      ),
+    eoaAddresses: z
+      .string()
+      .optional()
+      .describe(
+        "Comma-separated EOA signer addresses (e.g. 0xabc...,0xdef...)",
+      ),
+    threshold: z
+      .number()
+      .int()
+      .min(1)
+      .describe("Number of signers required to approve transactions"),
+    salt: z
+      .number()
+      .int()
+      .min(0)
+      .default(0)
+      .describe("Salt for address derivation (defaults to 0)"),
+  }),
+  async run({ env, options }) {
+    const passkeyIds = options.passkeyIds
+      ? options.passkeyIds.split(",").filter(Boolean)
+      : [];
+    const eoaSigners = options.eoaAddresses
+      ? options.eoaAddresses
+          .split(",")
+          .filter(Boolean)
+          .map((address) => ({ address }))
+      : [];
+    return apiRequest(env, "/org/accounts", {
+      method: "POST",
+      body: {
+        name: options.name,
+        passkeyIds,
+        eoaSigners,
+        threshold: options.threshold,
+        salt: options.salt,
+      },
+    });
+  },
+});
+
 cli.command(accounts);
 
 // =============================================================================
@@ -451,6 +505,22 @@ members.command("list", {
   env: authEnv,
   async run({ env }) {
     return apiRequest(env, "/members");
+  },
+});
+
+members.command("signers", {
+  description:
+    "List passkey signers for a specific org member by user ID. " +
+    "Use 'members list' first to find user IDs. Returns passkey IDs needed for 'accounts create'.",
+  env: authEnv,
+  args: z.object({
+    userId: z
+      .string()
+      .uuid("Invalid user ID")
+      .describe("Member user ID from 'members list'"),
+  }),
+  async run({ env, args }) {
+    return apiRequest(env, `/members/${args.userId}/signers`);
   },
 });
 

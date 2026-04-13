@@ -61,6 +61,20 @@ splits accounts unarchive <address>
 
 # Rename a subaccount (requires owner-scoped API key)
 splits accounts rename <address> --name "New Name"
+
+# Create a subaccount (requires owner-scoped API key)
+splits accounts create --name "Operations" --passkeyIds <id1>,<id2> --threshold 1
+splits accounts create --name "Ops" --eoaAddresses 0xabc...,0xdef... --threshold 2
+```
+
+### Members
+
+```sh
+# List org members
+splits members list
+
+# List passkey signers for a member (use for account creation)
+splits members signers <userId>
 ```
 
 ## MCP Server (Claude Code)
@@ -84,6 +98,9 @@ The MCP server exposes these tools:
 - `accounts_archive` — Archive a subaccount
 - `accounts_unarchive` — Unarchive a subaccount
 - `accounts_rename` — Rename a subaccount
+- `accounts_create` — Create a new subaccount
+- `members_list` — List org members
+- `members_signers` — List passkey signers for a member
 
 ## Configuration
 
