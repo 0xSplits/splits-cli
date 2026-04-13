@@ -124,7 +124,9 @@ accounts.command("balances", {
       .string()
       .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid Ethereum address")
       .optional()
-      .describe("Account address (0x...). Auto-selected if org has one account."),
+      .describe(
+        "Account address (0x...). Auto-selected if org has one account.",
+      ),
   }),
   options: z.object({
     chainIds: z
@@ -164,6 +166,68 @@ accounts.command("chains", {
   }),
   async run({ env, args }) {
     return apiRequest(env, `/org/accounts/${args.address}/chains`);
+  },
+});
+
+accounts.command("archive", {
+  description:
+    "Archive an OPERATING subaccount by address. Cannot archive TREASURY, ROOT, or AUTOMATION accounts, " +
+    "and fails if the account has pending state changes. Requires owner-scoped API key.",
+  env: authEnv,
+  args: z.object({
+    address: z
+      .string()
+      .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid Ethereum address")
+      .describe("Account address (0x...)"),
+  }),
+  async run({ env, args }) {
+    return apiRequest(env, `/org/accounts/${args.address}/archive`, {
+      method: "PUT",
+    });
+  },
+});
+
+accounts.command("unarchive", {
+  description:
+    "Unarchive a previously archived subaccount by address. " +
+    "Fails if the account has required state updates pending. Requires owner-scoped API key.",
+  env: authEnv,
+  args: z.object({
+    address: z
+      .string()
+      .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid Ethereum address")
+      .describe("Account address (0x...)"),
+  }),
+  async run({ env, args }) {
+    return apiRequest(env, `/org/accounts/${args.address}/unarchive`, {
+      method: "PUT",
+    });
+  },
+});
+
+accounts.command("rename", {
+  description:
+    "Rename a subaccount by address. Name max 255 chars, trimmed. Requires owner-scoped API key.",
+  env: authEnv,
+  args: z.object({
+    address: z
+      .string()
+      .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid Ethereum address")
+      .describe("Account address (0x...)"),
+  }),
+  options: z.object({
+    name: z
+      .string()
+      .trim()
+      .min(1)
+      .max(255)
+      .describe("New account name (max 255 chars)"),
+  }),
+  async run({ env, args, options }) {
+    return apiRequest(env, `/org/accounts/${args.address}/rename`, {
+      method: "PUT",
+      body: { name: options.name },
+    });
   },
 });
 

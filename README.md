@@ -52,6 +52,15 @@ splits accounts list --includeArchived
 
 # Get account details
 splits accounts get <address>
+
+# Archive a subaccount (requires owner-scoped API key)
+splits accounts archive <address>
+
+# Unarchive a subaccount (requires owner-scoped API key)
+splits accounts unarchive <address>
+
+# Rename a subaccount (requires owner-scoped API key)
+splits accounts rename <address> --name "New Name"
 ```
 
 ## MCP Server (Claude Code)
@@ -72,6 +81,9 @@ The MCP server exposes these tools:
 - `transactions_update_gas_estimation` — Update gas estimates for an existing transaction
 - `accounts_list` — List accounts in your org
 - `accounts_get` — Get account details by address
+- `accounts_archive` — Archive a subaccount
+- `accounts_unarchive` — Unarchive a subaccount
+- `accounts_rename` — Rename a subaccount
 
 ## Configuration
 
