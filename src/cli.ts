@@ -171,8 +171,7 @@ accounts.command("chains", {
 
 accounts.command("archive", {
   description:
-    "Archive an OPERATING subaccount by address. Cannot archive TREASURY, ROOT, or AUTOMATION accounts, " +
-    "and fails if the account has pending state changes. Requires owner-scoped API key.",
+    "Archive a subaccount by address. Fails if the account has pending state changes. Requires owner-scoped API key.",
   env: authEnv,
   args: z.object({
     address: z
