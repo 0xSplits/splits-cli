@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { Cli, z } from "incur";
 
+import { evmAddress, transactionId } from "./schemas.js";
+
 const cli = Cli.create("splits", {
   version: "0.0.1",
   description: "Splits CLI — programmatic access to the Splits platform",
@@ -106,10 +108,7 @@ accounts.command("get", {
   description: "Get account details by address",
   env: authEnv,
   args: z.object({
-    address: z
-      .string()
-      .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid Ethereum address")
-      .describe("Account address (0x...)"),
+    address: evmAddress.describe("Account address (0x...)"),
   }),
   async run({ env, args }) {
     return apiRequest(env, `/org/accounts/${args.address}`);
@@ -120,9 +119,7 @@ accounts.command("balances", {
   description: "Get token balances for an account",
   env: authEnv,
   args: z.object({
-    address: z
-      .string()
-      .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid Ethereum address")
+    address: evmAddress
       .optional()
       .describe(
         "Account address (0x...). Auto-selected if org has one account.",
@@ -159,13 +156,109 @@ accounts.command("chains", {
   description: "List chains an account is deployed/synced on",
   env: authEnv,
   args: z.object({
-    address: z
-      .string()
-      .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid Ethereum address")
-      .describe("Account address (0x...)"),
+    address: evmAddress.describe("Account address (0x...)"),
   }),
   async run({ env, args }) {
     return apiRequest(env, `/org/accounts/${args.address}/chains`);
+  },
+});
+
+accounts.command("archive", {
+  description:
+    "Archive a subaccount by address. Fails if the account has pending state changes. Requires owner-scoped API key.",
+  env: authEnv,
+  args: z.object({
+    address: evmAddress.describe("Account address (0x...)"),
+  }),
+  async run({ env, args }) {
+    return apiRequest(env, `/org/accounts/${args.address}/archive`, {
+      method: "PUT",
+    });
+  },
+});
+
+accounts.command("unarchive", {
+  description:
+    "Unarchive a previously archived subaccount by address. " +
+    "Fails if the account has required state updates pending. Requires owner-scoped API key.",
+  env: authEnv,
+  args: z.object({
+    address: evmAddress.describe("Account address (0x...)"),
+  }),
+  async run({ env, args }) {
+    return apiRequest(env, `/org/accounts/${args.address}/unarchive`, {
+      method: "PUT",
+    });
+  },
+});
+
+accounts.command("rename", {
+  description:
+    "Rename a subaccount by address. Name max 255 chars, trimmed. Requires owner-scoped API key.",
+  env: authEnv,
+  args: z.object({
+    address: evmAddress.describe("Account address (0x...)"),
+  }),
+  options: z.object({
+    name: z
+      .string()
+      .trim()
+      .min(1)
+      .max(255)
+      .describe("New account name (max 255 chars)"),
+  }),
+  async run({ env, args, options }) {
+    return apiRequest(env, `/org/accounts/${args.address}/rename`, {
+      method: "PUT",
+      body: { name: options.name },
+    });
+  },
+});
+
+accounts.command("create", {
+  description:
+    "Create a new subaccount with specified signers and threshold. " +
+    "Use 'members signers <userId>' to discover passkey IDs. Requires owner-scoped API key.",
+  env: authEnv,
+  options: z.object({
+    name: z.string().min(1).max(255).describe("Account name (max 255 chars)"),
+    passkeyIds: z
+      .string()
+      .optional()
+      .describe(
+        "Comma-separated passkey IDs from 'members signers' (e.g. id1,id2)",
+      ),
+    eoaAddresses: z
+      .string()
+      .optional()
+      .describe(
+        "Comma-separated EOA signer addresses (e.g. 0xabc...,0xdef...)",
+      ),
+    threshold: z
+      .number()
+      .int()
+      .min(1)
+      .describe("Number of signers required to approve transactions"),
+  }),
+  async run({ env, options }) {
+    const passkeyIds = options.passkeyIds
+      ? options.passkeyIds.split(",").filter(Boolean)
+      : [];
+    const eoaSigners = options.eoaAddresses
+      ? options.eoaAddresses
+          .split(",")
+          .filter(Boolean)
+          .map((address) => ({ address }))
+      : [];
+    return apiRequest(env, "/org/accounts", {
+      method: "POST",
+      body: {
+        name: options.name,
+        passkeyIds,
+        eoaSigners,
+        threshold: options.threshold,
+      },
+    });
   },
 });
 
@@ -213,7 +306,7 @@ transactions.command("get", {
   description: "Get details for a specific transaction",
   env: authEnv,
   args: z.object({
-    id: z.string().uuid("Invalid transaction ID").describe("Transaction ID"),
+    id: transactionId.describe("Transaction ID"),
   }),
   async run({ env, args }) {
     return apiRequest(env, `/transactions/${args.id}`);
@@ -224,7 +317,7 @@ transactions.command("memo", {
   description: "Set or clear the memo on a transaction",
   env: authEnv,
   args: z.object({
-    id: z.string().uuid("Invalid transaction ID").describe("Transaction ID"),
+    id: transactionId.describe("Transaction ID"),
   }),
   options: z.object({
     memo: z
@@ -245,7 +338,7 @@ transactions.command("update-gas-estimation", {
     "Update gas estimates for an existing transaction. For multisig, run this when one signer remains.",
   env: authEnv,
   args: z.object({
-    id: z.string().uuid("Invalid transaction ID").describe("Transaction ID"),
+    id: transactionId.describe("Transaction ID"),
   }),
   async run({ env, args }) {
     return apiRequest(env, `/transactions/${args.id}/update_gas_estimation`, {
@@ -568,6 +661,22 @@ members.command("list", {
   env: authEnv,
   async run({ env }) {
     return apiRequest(env, "/members");
+  },
+});
+
+members.command("signers", {
+  description:
+    "List passkey signers for a specific org member by user ID. " +
+    "Use 'members list' first to find user IDs. Returns passkey IDs needed for 'accounts create'.",
+  env: authEnv,
+  args: z.object({
+    userId: z
+      .string()
+      .uuid("Invalid user ID")
+      .describe("Member user ID from 'members list'"),
+  }),
+  async run({ env, args }) {
+    return apiRequest(env, `/members/${args.userId}/signers`);
   },
 });
 
