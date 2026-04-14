@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { Cli, z } from "incur";
 
+import { evmAddress, transactionId } from "./schemas.js";
+
 const cli = Cli.create("splits", {
   version: "0.0.1",
   description: "Splits CLI — programmatic access to the Splits platform",
@@ -106,10 +108,7 @@ accounts.command("get", {
   description: "Get account details by address",
   env: authEnv,
   args: z.object({
-    address: z
-      .string()
-      .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid Ethereum address")
-      .describe("Account address (0x...)"),
+    address: evmAddress.describe("Account address (0x...)"),
   }),
   async run({ env, args }) {
     return apiRequest(env, `/org/accounts/${args.address}`);
@@ -120,9 +119,7 @@ accounts.command("balances", {
   description: "Get token balances for an account",
   env: authEnv,
   args: z.object({
-    address: z
-      .string()
-      .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid Ethereum address")
+    address: evmAddress
       .optional()
       .describe(
         "Account address (0x...). Auto-selected if org has one account.",
@@ -159,10 +156,7 @@ accounts.command("chains", {
   description: "List chains an account is deployed/synced on",
   env: authEnv,
   args: z.object({
-    address: z
-      .string()
-      .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid Ethereum address")
-      .describe("Account address (0x...)"),
+    address: evmAddress.describe("Account address (0x...)"),
   }),
   async run({ env, args }) {
     return apiRequest(env, `/org/accounts/${args.address}/chains`);
@@ -174,10 +168,7 @@ accounts.command("archive", {
     "Archive a subaccount by address. Fails if the account has pending state changes. Requires owner-scoped API key.",
   env: authEnv,
   args: z.object({
-    address: z
-      .string()
-      .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid Ethereum address")
-      .describe("Account address (0x...)"),
+    address: evmAddress.describe("Account address (0x...)"),
   }),
   async run({ env, args }) {
     return apiRequest(env, `/org/accounts/${args.address}/archive`, {
@@ -192,10 +183,7 @@ accounts.command("unarchive", {
     "Fails if the account has required state updates pending. Requires owner-scoped API key.",
   env: authEnv,
   args: z.object({
-    address: z
-      .string()
-      .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid Ethereum address")
-      .describe("Account address (0x...)"),
+    address: evmAddress.describe("Account address (0x...)"),
   }),
   async run({ env, args }) {
     return apiRequest(env, `/org/accounts/${args.address}/unarchive`, {
@@ -209,10 +197,7 @@ accounts.command("rename", {
     "Rename a subaccount by address. Name max 255 chars, trimmed. Requires owner-scoped API key.",
   env: authEnv,
   args: z.object({
-    address: z
-      .string()
-      .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid Ethereum address")
-      .describe("Account address (0x...)"),
+    address: evmAddress.describe("Account address (0x...)"),
   }),
   options: z.object({
     name: z
@@ -328,7 +313,7 @@ transactions.command("get", {
   description: "Get details for a specific transaction",
   env: authEnv,
   args: z.object({
-    id: z.string().uuid("Invalid transaction ID").describe("Transaction ID"),
+    id: transactionId.describe("Transaction ID"),
   }),
   async run({ env, args }) {
     return apiRequest(env, `/transactions/${args.id}`);
@@ -339,7 +324,7 @@ transactions.command("memo", {
   description: "Set or clear the memo on a transaction",
   env: authEnv,
   args: z.object({
-    id: z.string().uuid("Invalid transaction ID").describe("Transaction ID"),
+    id: transactionId.describe("Transaction ID"),
   }),
   options: z.object({
     memo: z
@@ -360,7 +345,7 @@ transactions.command("update-gas-estimation", {
     "Update gas estimates for an existing transaction. For multisig, run this when one signer remains.",
   env: authEnv,
   args: z.object({
-    id: z.string().uuid("Invalid transaction ID").describe("Transaction ID"),
+    id: transactionId.describe("Transaction ID"),
   }),
   async run({ env, args }) {
     return apiRequest(env, `/transactions/${args.id}/update_gas_estimation`, {
