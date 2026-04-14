@@ -239,12 +239,6 @@ accounts.command("create", {
       .int()
       .min(1)
       .describe("Number of signers required to approve transactions"),
-    salt: z
-      .number()
-      .int()
-      .min(0)
-      .default(0)
-      .describe("Salt for address derivation (defaults to 0)"),
   }),
   async run({ env, options }) {
     const passkeyIds = options.passkeyIds
@@ -263,7 +257,6 @@ accounts.command("create", {
         passkeyIds,
         eoaSigners,
         threshold: options.threshold,
-        salt: options.salt,
       },
     });
   },
