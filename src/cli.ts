@@ -718,5 +718,69 @@ automations.command("list", {
 
 cli.command(automations);
 
+// =============================================================================
+// org (unauthenticated commands)
+// =============================================================================
+
+// Env for commands that don't require an API key
+const publicEnv = z.object({
+  SPLITS_API_URL: z
+    .string()
+    .default("https://server.production.splits.org")
+    .describe("Splits API base URL"),
+});
+
+// Request helper without auth header for unauthenticated endpoints
+async function publicRequest(
+  env: { SPLITS_API_URL: string },
+  path: string,
+  options?: {
+    method?: "GET" | "POST";
+    body?: Record<string, unknown>;
+  },
+) {
+  const res = await fetch(`${env.SPLITS_API_URL}/public/v1${path}`, {
+    method: options?.method ?? "GET",
+    headers: {
+      ...(options?.body ? { "Content-Type": "application/json" } : {}),
+    },
+    ...(options?.body ? { body: JSON.stringify(options.body) } : {}),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(
+      (body as { error?: { message?: string } })?.error?.message ??
+        `API error: ${res.status}`,
+    );
+  }
+  return res.json();
+}
+
+const org = Cli.create("org", {
+  description: "Organization management",
+});
+
+org.command("create", {
+  description:
+    "Send a magic link to create a new org. Org creation completes in the web UI after clicking the link.",
+  env: publicEnv,
+  options: z.object({
+    email: z
+      .string()
+      .email("Invalid email address")
+      .describe(
+        "Email address to receive the create-org magic link. Org creation completes in the web UI after clicking the link.",
+      ),
+  }),
+  async run({ env, options }) {
+    return publicRequest(env, "/auth/send-create-org-link", {
+      method: "POST",
+      body: { email: options.email },
+    });
+  },
+});
+
+cli.command(org);
+
 cli.serve();
 export default cli;
