@@ -762,14 +762,14 @@ const org = Cli.create("org", {
 
 org.command("create", {
   description:
-    "Send a magic link to create a new org. Org creation completes in the web UI after clicking the link.",
+    "Start creating a new org. Sends a setup link to the provided email — complete org creation in the web UI.",
   env: publicEnv,
   options: z.object({
     email: z
       .string()
       .email("Invalid email address")
       .describe(
-        "Email address to receive the create-org magic link. Org creation completes in the web UI after clicking the link.",
+        "Email address to receive the org setup link. Complete org creation in the web UI.",
       ),
   }),
   async run({ env, options }) {
