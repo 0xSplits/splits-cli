@@ -262,6 +262,84 @@ accounts.command("create", {
   },
 });
 
+accounts.command("update-signers", {
+  description:
+    "Propose adding or removing signers (passkeys and/or EOAs) and/or changing the threshold on a subaccount. " +
+    "Primary use case: adding an external (EOA) key so an agent or automation can operate on the account headlessly " +
+    "— passkeys require a biometric 2nd factor that agents cannot provide. " +
+    "The proposal itself is created immediately; it must be approved and signed on the web via the printed Sign URL. " +
+    "Recovery / resetting signers stays web-only. " +
+    "Updates apply to every active network on the org automatically. " +
+    "Use 'members signers <userId>' to discover passkey authenticator IDs. Requires owner-scoped API key.",
+  env: authEnv,
+  args: z.object({
+    account: evmAddress.describe("Subaccount address (0x...)"),
+  }),
+  options: z.object({
+    addEoaAddresses: z
+      .string()
+      .optional()
+      .describe(
+        "Comma-separated EOA addresses to add as signers (e.g. 0xabc...,0xdef...)",
+      ),
+    removeEoaIds: z
+      .string()
+      .optional()
+      .describe(
+        "Comma-separated EOA signer IDs (from 'members signers') to remove",
+      ),
+    addPasskeyIds: z
+      .string()
+      .optional()
+      .describe(
+        "Comma-separated passkey authenticator IDs to add (from 'members signers')",
+      ),
+    removePasskeyIds: z
+      .string()
+      .optional()
+      .describe(
+        "Comma-separated passkey authenticator IDs to remove (from 'members signers')",
+      ),
+    threshold: z
+      .number()
+      .int()
+      .min(1)
+      .optional()
+      .describe("New signer threshold. Unchanged if omitted."),
+    memo: z.string().optional().describe("Optional memo (max 500 chars)"),
+  }),
+  async run({ env, args, options }) {
+    const splitCsv = (s: string | undefined) =>
+      s
+        ? s
+            .split(",")
+            .map((x) => x.trim())
+            .filter(Boolean)
+        : [];
+    const body: Record<string, unknown> = {
+      account: args.account,
+      addPasskeyIds: splitCsv(options.addPasskeyIds),
+      removePasskeyIds: splitCsv(options.removePasskeyIds),
+      addEoaSigners: splitCsv(options.addEoaAddresses).map((address) => ({
+        address,
+      })),
+      removeEoaSignerIds: splitCsv(options.removeEoaIds),
+    };
+    if (options.threshold !== undefined) body.threshold = options.threshold;
+    if (options.memo !== undefined) body.memo = options.memo;
+
+    const result = (await apiRequest(env, "/proposals/update_signers", {
+      method: "POST",
+      body,
+    })) as { data?: { signUrl?: string } };
+
+    if (result.data?.signUrl) {
+      process.stdout.write(`Sign URL: ${result.data.signUrl}\n`);
+    }
+    return result;
+  },
+});
+
 cli.command(accounts);
 
 // =============================================================================
