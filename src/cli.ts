@@ -331,13 +331,6 @@ accounts.command("update-signers", {
         "Optional comma-separated human-readable names aligned by index with --add-eoa-addresses. " +
           "Count must match --add-eoa-addresses if provided. Use empty slots to skip (e.g. ',Agent Two').",
       ),
-    addEoaEmails: z
-      .string()
-      .optional()
-      .describe(
-        "Optional comma-separated contact emails aligned by index with --add-eoa-addresses. " +
-          "Count must match --add-eoa-addresses if provided. Use empty slots to skip (e.g. 'ops@x.com,').",
-      ),
     removeEoaIds: z
       .string()
       .optional()
@@ -366,31 +359,23 @@ accounts.command("update-signers", {
   }),
   async run({ env, args, options }) {
     const addEoaAddresses = splitCsv(options.addEoaAddresses);
-    // Preserve empty slots here so names/emails align by index with addresses,
-    // even when the user wants to skip a middle entry (e.g. ",Agent Two").
+    // Preserve empty slots here so names align by index with addresses, even
+    // when the user wants to skip a middle entry (e.g. ",Agent Two").
     const splitAligned = (s: string | undefined): string[] =>
       s === undefined ? [] : s.split(",").map((x) => x.trim());
     const addEoaNames = splitAligned(options.addEoaNames);
-    const addEoaEmails = splitAligned(options.addEoaEmails);
     if (addEoaNames.length > 0 && addEoaNames.length !== addEoaAddresses.length)
       throw new Error(
         `--add-eoa-names count (${addEoaNames.length}) must match --add-eoa-addresses count (${addEoaAddresses.length})`,
       );
-    if (
-      addEoaEmails.length > 0 &&
-      addEoaEmails.length !== addEoaAddresses.length
-    )
-      throw new Error(
-        `--add-eoa-emails count (${addEoaEmails.length}) must match --add-eoa-addresses count (${addEoaAddresses.length})`,
-      );
 
+    // The added signer is attributed to the API key's user server-side; no
+    // email is sent from the client.
     const addEoaSigners = addEoaAddresses.map((address, i) => {
       const name = addEoaNames[i];
-      const email = addEoaEmails[i];
       return {
         address,
         ...(name ? { name } : {}),
-        ...(email ? { email } : {}),
       };
     });
 
