@@ -308,6 +308,8 @@ accounts.command("update-signers", {
     "Propose adding or removing signers (passkeys and/or EOAs) and/or changing the threshold on a subaccount. " +
     "Primary use case: adding an external (EOA) key so an agent or automation can operate on the account headlessly " +
     "— passkeys require a biometric 2nd factor that agents cannot provide. " +
+    "Added EOA signers are attributed to the user that owns the API key making the request; " +
+    "you cannot add an EOA on behalf of another user via this command. " +
     "The proposal is created immediately; it must be approved and signed on the web via the printed Sign URL. " +
     "Poll 'transactions get <id>' to watch status transition from CREATED to EXECUTED. " +
     "If this returns 409 SMART_ACCOUNT_STATE_CHANGE_IN_PROGRESS, call 'transactions list --account <address>' " +
