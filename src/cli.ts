@@ -19,15 +19,29 @@ const authEnv = z.object({
     .describe("Splits API base URL"),
 });
 
+// Typed error thrown by apiRequest so callers (including MCP consumers) can
+// branch on machine-readable backend error codes like SELF_TAKEOVER_BLOCKED,
+// PASSKEY_NOT_AVAILABLE, SMART_ACCOUNT_STATE_CHANGE_IN_PROGRESS, etc.
+export class SplitsApiError extends Error {
+  readonly code: string | undefined;
+  readonly status: number;
+  constructor(code: string | undefined, status: number, message: string) {
+    super(code ? `[${code}] ${message}` : message);
+    this.name = "SplitsApiError";
+    this.code = code;
+    this.status = status;
+  }
+}
+
 // Helper: make authenticated request
-async function apiRequest(
+async function apiRequest<T = unknown>(
   env: { SPLITS_API_KEY: string; SPLITS_API_URL: string },
   path: string,
   options?: {
     method?: "GET" | "PUT" | "POST" | "DELETE";
     body?: Record<string, unknown>;
   },
-) {
+): Promise<T> {
   const res = await fetch(`${env.SPLITS_API_URL}/public/v1${path}`, {
     method: options?.method ?? "GET",
     headers: {
@@ -38,13 +52,48 @@ async function apiRequest(
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(
-      (body as { error?: { message?: string } })?.error?.message ??
-        `API error: ${res.status}`,
-    );
+    const errObj = (body as { error?: { code?: string; message?: string } })
+      ?.error;
+    const code = errObj?.code;
+    const message = errObj?.message ?? `API error: ${res.status}`;
+    throw new SplitsApiError(code, res.status, message);
   }
-  return res.json();
+  return res.json() as Promise<T>;
 }
+
+// Helper: refine a CSV string so each comma-separated token is a valid EVM
+// address. Fails client-side before the HTTP call. Uses superRefine so the
+// error message can name the offending token.
+const EVM_ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
+const csvEvmAddresses = (fieldHint: string) =>
+  z
+    .string()
+    .optional()
+    .superRefine((s, ctx) => {
+      if (!s) return;
+      const tokens = s
+        .split(",")
+        .map((x) => x.trim())
+        .filter(Boolean);
+      const bad = tokens.find((t) => !EVM_ADDRESS_RE.test(t));
+      if (bad !== undefined) {
+        ctx.addIssue({
+          code: "custom",
+          message:
+            `${fieldHint} must be a comma-separated list of 0x-prefixed ` +
+            `40-hex-char EVM addresses (invalid: ${bad})`,
+        });
+      }
+    });
+
+// Helper: split a CSV string into trimmed, non-empty tokens.
+const splitCsv = (s: string | undefined): string[] =>
+  s
+    ? s
+        .split(",")
+        .map((x) => x.trim())
+        .filter(Boolean)
+    : [];
 
 // Helper: build query string from params object
 function buildQuery(
@@ -134,9 +183,9 @@ accounts.command("balances", {
   async run({ env, args, options }) {
     let address = args.address;
     if (!address) {
-      const result = (await apiRequest(env, "/org/accounts")) as {
+      const result = await apiRequest<{
         data: Array<{ address: string }>;
-      };
+      }>(env, "/org/accounts");
       if (result.data.length === 1) {
         address = result.data[0].address;
       } else {
@@ -228,12 +277,9 @@ accounts.command("create", {
       .describe(
         "Comma-separated passkey IDs from 'members signers' (e.g. id1,id2)",
       ),
-    eoaAddresses: z
-      .string()
-      .optional()
-      .describe(
-        "Comma-separated EOA signer addresses (e.g. 0xabc...,0xdef...)",
-      ),
+    eoaAddresses: csvEvmAddresses("--eoa-addresses").describe(
+      "Comma-separated EOA signer addresses (e.g. 0xabc...,0xdef...)",
+    ),
     threshold: z
       .number()
       .int()
@@ -241,15 +287,10 @@ accounts.command("create", {
       .describe("Number of signers required to approve transactions"),
   }),
   async run({ env, options }) {
-    const passkeyIds = options.passkeyIds
-      ? options.passkeyIds.split(",").filter(Boolean)
-      : [];
-    const eoaSigners = options.eoaAddresses
-      ? options.eoaAddresses
-          .split(",")
-          .filter(Boolean)
-          .map((address) => ({ address }))
-      : [];
+    const passkeyIds = splitCsv(options.passkeyIds);
+    const eoaSigners = splitCsv(options.eoaAddresses).map((address) => ({
+      address,
+    }));
     return apiRequest(env, "/org/accounts", {
       method: "POST",
       body: {
@@ -267,26 +308,41 @@ accounts.command("update-signers", {
     "Propose adding or removing signers (passkeys and/or EOAs) and/or changing the threshold on a subaccount. " +
     "Primary use case: adding an external (EOA) key so an agent or automation can operate on the account headlessly " +
     "— passkeys require a biometric 2nd factor that agents cannot provide. " +
-    "The proposal itself is created immediately; it must be approved and signed on the web via the printed Sign URL. " +
+    "The proposal is created immediately; it must be approved and signed on the web via the printed Sign URL. " +
+    "Poll 'transactions get <id>' to watch status transition from CREATED to EXECUTED. " +
+    "If this returns 409 SMART_ACCOUNT_STATE_CHANGE_IN_PROGRESS, call 'transactions list --account <address>' " +
+    "to find the pending proposal; it must be signed (web) or cancelled before retrying. " +
     "Recovery / resetting signers stays web-only. " +
     "Updates apply to every active network on the org automatically. " +
-    "Use 'members signers <userId>' to discover passkey authenticator IDs. Requires owner-scoped API key.",
+    "Use 'accounts get <address>' to discover existing signer IDs (passkeys and EOAs). " +
+    "Requires owner-scoped API key.",
   env: authEnv,
   args: z.object({
     account: evmAddress.describe("Subaccount address (0x...)"),
   }),
   options: z.object({
-    addEoaAddresses: z
+    addEoaAddresses: csvEvmAddresses("--add-eoa-addresses").describe(
+      "Comma-separated EOA addresses to add as signers (e.g. 0xabc...,0xdef...)",
+    ),
+    addEoaNames: z
       .string()
       .optional()
       .describe(
-        "Comma-separated EOA addresses to add as signers (e.g. 0xabc...,0xdef...)",
+        "Optional comma-separated human-readable names aligned by index with --add-eoa-addresses. " +
+          "Count must match --add-eoa-addresses if provided. Use empty slots to skip (e.g. ',Agent Two').",
+      ),
+    addEoaEmails: z
+      .string()
+      .optional()
+      .describe(
+        "Optional comma-separated contact emails aligned by index with --add-eoa-addresses. " +
+          "Count must match --add-eoa-addresses if provided. Use empty slots to skip (e.g. 'ops@x.com,').",
       ),
     removeEoaIds: z
       .string()
       .optional()
       .describe(
-        "Comma-separated EOA signer IDs (from 'members signers') to remove",
+        "Comma-separated EOA signer IDs (from 'accounts get <address>') to remove",
       ),
     addPasskeyIds: z
       .string()
@@ -309,29 +365,50 @@ accounts.command("update-signers", {
     memo: z.string().optional().describe("Optional memo (max 500 chars)"),
   }),
   async run({ env, args, options }) {
-    const splitCsv = (s: string | undefined) =>
-      s
-        ? s
-            .split(",")
-            .map((x) => x.trim())
-            .filter(Boolean)
-        : [];
-    const body: Record<string, unknown> = {
+    const addEoaAddresses = splitCsv(options.addEoaAddresses);
+    // Preserve empty slots here so names/emails align by index with addresses,
+    // even when the user wants to skip a middle entry (e.g. ",Agent Two").
+    const splitAligned = (s: string | undefined): string[] =>
+      s === undefined ? [] : s.split(",").map((x) => x.trim());
+    const addEoaNames = splitAligned(options.addEoaNames);
+    const addEoaEmails = splitAligned(options.addEoaEmails);
+    if (addEoaNames.length > 0 && addEoaNames.length !== addEoaAddresses.length)
+      throw new Error(
+        `--add-eoa-names count (${addEoaNames.length}) must match --add-eoa-addresses count (${addEoaAddresses.length})`,
+      );
+    if (
+      addEoaEmails.length > 0 &&
+      addEoaEmails.length !== addEoaAddresses.length
+    )
+      throw new Error(
+        `--add-eoa-emails count (${addEoaEmails.length}) must match --add-eoa-addresses count (${addEoaAddresses.length})`,
+      );
+
+    const addEoaSigners = addEoaAddresses.map((address, i) => {
+      const name = addEoaNames[i];
+      const email = addEoaEmails[i];
+      return {
+        address,
+        ...(name ? { name } : {}),
+        ...(email ? { email } : {}),
+      };
+    });
+
+    const body = {
       account: args.account,
       addPasskeyIds: splitCsv(options.addPasskeyIds),
       removePasskeyIds: splitCsv(options.removePasskeyIds),
-      addEoaSigners: splitCsv(options.addEoaAddresses).map((address) => ({
-        address,
-      })),
+      addEoaSigners,
       removeEoaSignerIds: splitCsv(options.removeEoaIds),
-    };
-    if (options.threshold !== undefined) body.threshold = options.threshold;
-    if (options.memo !== undefined) body.memo = options.memo;
+      ...(options.threshold !== undefined && { threshold: options.threshold }),
+      ...(options.memo !== undefined && { memo: options.memo }),
+    } satisfies Record<string, unknown>;
 
-    const result = (await apiRequest(env, "/proposals/update_signers", {
-      method: "POST",
-      body,
-    })) as { data?: { signUrl?: string } };
+    const result = await apiRequest<{ data?: { signUrl?: string } }>(
+      env,
+      "/proposals/update_signers",
+      { method: "POST", body },
+    );
 
     if (result.data?.signUrl) {
       process.stdout.write(`Sign URL: ${result.data.signUrl}\n`);
@@ -490,17 +567,19 @@ create.command("transfer", {
       ),
   }),
   async run({ env, options }) {
-    const body: Record<string, unknown> = {
+    const body = {
       account: options.account,
       chainId: options.chainId,
       recipient: options.recipient,
       token: options.token,
       amount: options.amount,
-    };
-    if (options.memo !== undefined) body.memo = options.memo;
-    if (options.name !== undefined) body.name = options.name;
-    if (options.validUntil !== undefined) body.validUntil = options.validUntil;
-    return apiRequest(env, "/proposals/transfer", {
+      ...(options.memo !== undefined && { memo: options.memo }),
+      ...(options.name !== undefined && { name: options.name }),
+      ...(options.validUntil !== undefined && {
+        validUntil: options.validUntil,
+      }),
+    } satisfies Record<string, unknown>;
+    return apiRequest<{ data?: unknown }>(env, "/proposals/transfer", {
       method: "POST",
       body,
     });
@@ -565,15 +644,17 @@ create.command("custom", {
       ),
   }),
   async run({ env, options }) {
-    const body: Record<string, unknown> = {
+    const body = {
       account: options.account,
       chainId: options.chainId,
       calls: options.calls,
-    };
-    if (options.memo !== undefined) body.memo = options.memo;
-    if (options.name !== undefined) body.name = options.name;
-    if (options.validUntil !== undefined) body.validUntil = options.validUntil;
-    return apiRequest(env, "/proposals/custom", {
+      ...(options.memo !== undefined && { memo: options.memo }),
+      ...(options.name !== undefined && { name: options.name }),
+      ...(options.validUntil !== undefined && {
+        validUntil: options.validUntil,
+      }),
+    } satisfies Record<string, unknown>;
+    return apiRequest<{ data?: unknown }>(env, "/proposals/custom", {
       method: "POST",
       body,
     });
@@ -713,9 +794,9 @@ chains.command("get", {
     chainId: z.number().describe("Chain ID (e.g. 1, 8453)"),
   }),
   async run({ env, args }) {
-    const result = (await apiRequest(env, "/chains")) as {
+    const result = await apiRequest<{
       data: Array<{ chainId: number }>;
-    };
+    }>(env, "/chains");
     const chain = result.data.find((c) => c.chainId === args.chainId);
     if (!chain) {
       throw new Error(`Chain not found: ${args.chainId}`);
@@ -809,14 +890,14 @@ const publicEnv = z.object({
 });
 
 // Request helper without auth header for unauthenticated endpoints
-async function publicRequest(
+async function publicRequest<T = unknown>(
   env: { SPLITS_API_URL: string },
   path: string,
   options?: {
     method?: "GET" | "POST";
     body?: Record<string, unknown>;
   },
-) {
+): Promise<T> {
   const res = await fetch(`${env.SPLITS_API_URL}/public/v1${path}`, {
     method: options?.method ?? "GET",
     headers: {
@@ -826,12 +907,13 @@ async function publicRequest(
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(
-      (body as { error?: { message?: string } })?.error?.message ??
-        `API error: ${res.status}`,
-    );
+    const errObj = (body as { error?: { code?: string; message?: string } })
+      ?.error;
+    const code = errObj?.code;
+    const message = errObj?.message ?? `API error: ${res.status}`;
+    throw new SplitsApiError(code, res.status, message);
   }
-  return res.json();
+  return res.json() as Promise<T>;
 }
 
 const org = Cli.create("org", {
