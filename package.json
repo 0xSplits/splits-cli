@@ -16,7 +16,8 @@
     "release": "npm version patch && pnpm publish --access public"
   },
   "dependencies": {
-    "incur": "^0.3.13"
+    "incur": "^0.3.13",
+    "viem": "^2.48.2"
   },
   "pnpm": {
     "overrides": {
