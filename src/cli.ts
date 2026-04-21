@@ -478,6 +478,19 @@ accounts.command("chains", {
   },
 });
 
+accounts.command("signers", {
+  description:
+    "List passkey and EOA signers (with current threshold) for a subaccount. " +
+    "Returns the signer IDs needed by 'accounts update-signers' to add or remove signers.",
+  env: authEnv,
+  args: z.object({
+    address: evmAddress.describe("Account address (0x...)"),
+  }),
+  async run({ env, args }) {
+    return apiRequest(env, `/org/accounts/${args.address}/signers`);
+  },
+});
+
 accounts.command("archive", {
   description:
     "Archive a subaccount by address. Fails if the account has pending state changes. Requires owner-scoped API key.",
@@ -582,7 +595,7 @@ accounts.command("update-signers", {
     "to find the pending proposal; it must be signed (web) or cancelled before retrying. " +
     "Recovery / resetting signers stays web-only. " +
     "Updates apply to every active network on the org automatically. " +
-    "Use 'accounts get <address>' to discover existing signer IDs (passkeys and EOAs). " +
+    "Use 'accounts signers <address>' to discover existing signer IDs (passkeys and EOAs). " +
     "Requires owner-scoped API key.",
   env: authEnv,
   args: z.object({

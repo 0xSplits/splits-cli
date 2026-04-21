@@ -104,6 +104,9 @@ splits accounts list --includeArchived
 # Get account details
 splits accounts get <address>
 
+# List signers (passkeys + EOAs) and threshold for a subaccount
+splits accounts signers <address>
+
 # Archive a subaccount (requires owner-scoped API key)
 splits accounts archive <address>
 
@@ -146,6 +149,7 @@ The MCP server exposes these tools:
 - `transactions_update_gas_estimation` — Update gas estimates for an existing transaction
 - `accounts_list` — List accounts in your org
 - `accounts_get` — Get account details by address
+- `accounts_signers` — List passkey + EOA signers and threshold for a subaccount
 - `accounts_archive` — Archive a subaccount
 - `accounts_unarchive` — Unarchive a subaccount
 - `accounts_rename` — Rename a subaccount
