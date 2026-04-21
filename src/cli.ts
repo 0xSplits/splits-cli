@@ -103,8 +103,16 @@ async function apiRequest<T = unknown>(
 
 // Read the next chunk of stdin until EOF. Used by `auth login` and
 // `auth import-key` so secrets never appear on the command line.
+// Under MCP mode there is no TTY and no piped input — refuse fast rather
+// than hanging on an empty stream until the MCP call times out.
 const readStdin = async (): Promise<string> => {
   if (process.stdin.isTTY) return "";
+  if (mcpMode()) {
+    throw new Error(
+      "Secrets cannot be piped into an MCP tool call. " +
+        "Run `auth login` / `auth import-key` outside MCP, or set SPLITS_API_KEY in the MCP server's environment.",
+    );
+  }
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) {
     chunks.push(
@@ -1034,6 +1042,10 @@ transactions.command("sign", {
       };
     };
 
+    // The signingHash is the single piece of data this command actually signs.
+    // Validate shape before passing to viem so a malformed API response can't
+    // coerce the CLI into signing attacker-chosen bytes as raw message input.
+    const SIGNING_HASH_RE = /^0x[0-9a-f]{2,128}$/i;
     const fetchSigningHash = async (): Promise<`0x${string}`> => {
       const tx = await apiRequest<TxGetResponse>(
         env,
@@ -1045,6 +1057,13 @@ transactions.command("sign", {
           "transaction-not-cli-signable",
           0,
           "This transaction does not expose a signingHash (e.g. merkle or deploy paths). Sign via the web app.",
+        );
+      }
+      if (typeof hash !== "string" || !SIGNING_HASH_RE.test(hash)) {
+        throw new SplitsApiError(
+          "invalid-signing-hash",
+          0,
+          `Backend returned a malformed signingHash (${JSON.stringify(hash)}). Refusing to sign.`,
         );
       }
       return hash as `0x${string}`;
