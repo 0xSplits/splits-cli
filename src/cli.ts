@@ -1058,7 +1058,8 @@ transactions.command("sign", {
     // The signingHash is the single piece of data this command actually signs.
     // Validate shape before passing to viem so a malformed API response can't
     // coerce the CLI into signing attacker-chosen bytes as raw message input.
-    const SIGNING_HASH_RE = /^0x[0-9a-f]{2,128}$/i;
+    // Exact 32-byte keccak output: "0x" + 64 hex chars.
+    const SIGNING_HASH_RE = /^0x[0-9a-f]{64}$/i;
     const fetchSigningHash = async (): Promise<`0x${string}`> => {
       const tx = await apiRequest<TxGetResponse>(
         env,
@@ -1326,24 +1327,30 @@ cli.command(automations);
 // org (unauthenticated commands)
 // =============================================================================
 
-// Env for commands that don't require an API key
+// Env for commands that don't require an API key. Shares URL resolution with
+// authenticated commands so `auth login --api-url <staging>` affects public
+// routes too (instead of silently falling back to production).
 const publicEnv = z.object({
   SPLITS_API_URL: z
     .string()
-    .default("https://server.production.splits.org")
-    .describe("Splits API base URL"),
+    .optional()
+    .describe(
+      "Splits API base URL. " +
+        "Falls back to the URL saved by `splits auth login`, then to the production URL.",
+    ),
 });
 
 // Request helper without auth header for unauthenticated endpoints
 async function publicRequest<T = unknown>(
-  env: { SPLITS_API_URL: string },
+  env: { SPLITS_API_URL?: string },
   path: string,
   options?: {
     method?: "GET" | "POST";
     body?: Record<string, unknown>;
   },
 ): Promise<T> {
-  const res = await fetch(`${env.SPLITS_API_URL}/public/v1${path}`, {
+  const apiUrl = await resolveApiUrl(env);
+  const res = await fetch(`${apiUrl}/public/v1${path}`, {
     method: options?.method ?? "GET",
     headers: {
       ...(options?.body ? { "Content-Type": "application/json" } : {}),
