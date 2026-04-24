@@ -285,8 +285,9 @@ auth.command("create-key", {
   description:
     "Generate a new local Ethereum EOA and save it to ~/.splits/config.json (mode 0600). " +
     "The key is used by `splits transactions sign` to approve multisig transactions locally. " +
-    "Use `splits accounts update-signers <account> --generate-eoa` for a one-shot " +
-    "generate-and-register flow. Refuses if a key already exists — delete it first.",
+    "Creates the key only — to use it as a signer, follow up with " +
+    "`splits auth register-signer <address>` (then `splits accounts update-signers`). " +
+    "Refuses if a key already exists — delete it first.",
   options: z.object({
     name: z
       .string()
@@ -389,6 +390,66 @@ auth.command("import-key", {
       address: account.address,
       path: CONFIG_FILE_PATH,
     };
+  },
+});
+
+auth.command("register-signer", {
+  description:
+    "Register an EOA address with the Splits backend so it can be attached " +
+    "to smart accounts as a signer. Idempotent — re-running with the same " +
+    "address returns the same id (and preserves the first name). The " +
+    "returned id is what `splits accounts update-signers --add-eoa-signer-ids` " +
+    "expects. The address is attributed to the user that owns the API key; " +
+    "you cannot register an address on behalf of another user.",
+  env: authEnv,
+  args: z.object({
+    address: evmAddress.describe("EOA address to register (0x...)"),
+  }),
+  options: z.object({
+    name: z
+      .string()
+      .min(1)
+      .max(200)
+      .optional()
+      .describe(
+        "Optional human-readable name for this signer. First name wins — " +
+          "re-registering with a different name keeps the original.",
+      ),
+  }),
+  async run({ env, args, options }) {
+    const body = {
+      address: args.address,
+      ...(options.name !== undefined && { name: options.name }),
+    };
+    const result = await apiRequest<{
+      data: {
+        id: string;
+        address: string;
+        name: string | null;
+        email: string | null;
+        lastVerifiedAt: string | null;
+      };
+    }>(env, "/eoa_signers", { method: "POST", body });
+    return result;
+  },
+});
+
+auth.command("signers", {
+  description:
+    "List EOA signers registered under the acting user. Returns the ids " +
+    "needed by `splits accounts update-signers --add-eoa-signer-ids` plus " +
+    "each signer's address, display name, and last verification timestamp.",
+  env: authEnv,
+  async run({ env }) {
+    return apiRequest<{
+      data: Array<{
+        id: string;
+        address: string;
+        name: string | null;
+        email: string | null;
+        lastVerifiedAt: string | null;
+      }>;
+    }>(env, "/eoa_signers");
   },
 });
 
@@ -585,38 +646,36 @@ accounts.command("create", {
 accounts.command("update-signers", {
   description:
     "Propose adding or removing signers (passkeys and/or EOAs) and/or changing the threshold on a subaccount. " +
+    "EOA adds reference ids returned by `splits auth register-signer`; register the address first, then attach " +
+    "its id here. The same id can be attached to any number of accounts. " +
     "Primary use case: adding an external (EOA) key so an agent or automation can operate on the account headlessly " +
     "— passkeys require a biometric 2nd factor that agents cannot provide. " +
-    "Added EOA signers are attributed to the user that owns the API key making the request; " +
-    "you cannot add an EOA on behalf of another user via this command. " +
     "The proposal is created immediately; it must be approved and signed on the web via the printed Sign URL. " +
     "Poll 'transactions get <id>' to watch status transition from CREATED to EXECUTED. " +
     "If this returns 409 SMART_ACCOUNT_STATE_CHANGE_IN_PROGRESS, call 'transactions list --account <address>' " +
     "to find the pending proposal; it must be signed (web) or cancelled before retrying. " +
     "Recovery / resetting signers stays web-only. " +
     "Updates apply to every active network on the org automatically. " +
-    "Use 'accounts signers <address>' to discover existing signer IDs (passkeys and EOAs). " +
+    "Use 'accounts signers <address>' to discover existing signer IDs (passkeys and EOAs), and " +
+    "`auth signers` to list the EOA ids registered under the acting user. " +
     "Requires owner-scoped API key.",
   env: authEnv,
   args: z.object({
     account: evmAddress.describe("Subaccount address (0x...)"),
   }),
   options: z.object({
-    addEoaAddresses: csvEvmAddresses("--add-eoa-addresses").describe(
-      "Comma-separated EOA addresses to add as signers (e.g. 0xabc...,0xdef...)",
-    ),
-    addEoaNames: z
+    addEoaSignerIds: z
       .string()
       .optional()
       .describe(
-        "Optional comma-separated human-readable names aligned by index with --add-eoa-addresses. " +
-          "Count must match --add-eoa-addresses if provided. Use empty slots to skip (e.g. ',Agent Two').",
+        "Comma-separated EOA signer ids (from `auth register-signer` / `auth signers`) to attach. " +
+          "The same id can be attached to multiple accounts.",
       ),
     removeEoaIds: z
       .string()
       .optional()
       .describe(
-        "Comma-separated EOA signer IDs (from 'accounts get <address>') to remove",
+        "Comma-separated EOA signer IDs (from 'accounts signers <address>') to remove",
       ),
     addPasskeyIds: z
       .string()
@@ -637,108 +696,28 @@ accounts.command("update-signers", {
       .optional()
       .describe("New signer threshold. Unchanged if omitted."),
     memo: z.string().optional().describe("Optional memo (max 500 chars)"),
-    generateEoa: z
-      .boolean()
-      .default(false)
-      .describe(
-        "Generate a new local EOA (via `auth create-key`) and register its address " +
-          "as a signer in a single call. Mutually exclusive with --add-eoa-addresses; " +
-          "refuses if a local key already exists (run `auth delete-key` first).",
-      ),
-    generateEoaName: z
-      .string()
-      .optional()
-      .describe(
-        "Optional name for the key created by --generate-eoa. " +
-          "Defaults to a short form of the address.",
-      ),
   }),
   async run({ env, args, options }) {
-    const addEoaAddresses = splitCsv(options.addEoaAddresses);
-    // Preserve empty slots here so names align by index with addresses, even
-    // when the user wants to skip a middle entry (e.g. ",Agent Two").
-    const splitAligned = (s: string | undefined): string[] =>
-      s === undefined ? [] : s.split(",").map((x) => x.trim());
-    const addEoaNames = splitAligned(options.addEoaNames);
-    if (addEoaNames.length > 0 && addEoaNames.length !== addEoaAddresses.length)
-      throw new Error(
-        `--add-eoa-names count (${addEoaNames.length}) must match --add-eoa-addresses count (${addEoaAddresses.length})`,
-      );
-
-    // The added signer is attributed to the API key's user server-side; no
-    // email is sent from the client.
-    const addEoaSigners: Array<{ address: string; name?: string }> =
-      addEoaAddresses.map((address, i) => {
-        const name = addEoaNames[i];
-        return {
-          address,
-          ...(name ? { name } : {}),
-        };
-      });
-
-    // --generate-eoa: create a local key and register its address in one shot.
-    // Mirrors `auth create-key` refuse-on-exists policy; on API failure we
-    // roll back the local key so the user isn't left with an orphaned one.
-    let generatedAddress: `0x${string}` | null = null;
-    if (options.generateEoa) {
-      if (addEoaAddresses.length > 0) {
-        throw new Error(
-          "--generate-eoa and --add-eoa-addresses are mutually exclusive. Use one or the other.",
-        );
-      }
-      const privateKey = generatePrivateKey();
-      const account = privateKeyToAccount(privateKey);
-      const name = options.generateEoaName ?? defaultKeyName(account.address);
-      await saveKey({
-        name,
-        address: account.address,
-        privateKey,
-      });
-      generatedAddress = account.address;
-      addEoaSigners.push({ address: account.address, name });
-    }
-
     const body = {
       account: args.account,
       addPasskeyIds: splitCsv(options.addPasskeyIds),
       removePasskeyIds: splitCsv(options.removePasskeyIds),
-      addEoaSigners,
+      addEoaSignerIds: splitCsv(options.addEoaSignerIds),
       removeEoaSignerIds: splitCsv(options.removeEoaIds),
       ...(options.threshold !== undefined && { threshold: options.threshold }),
       ...(options.memo !== undefined && { memo: options.memo }),
     } satisfies Record<string, unknown>;
 
-    let result: { data?: { signUrl?: string } };
-    try {
-      result = await apiRequest<{ data?: { signUrl?: string } }>(
-        env,
-        "/proposals/update_signers",
-        { method: "POST", body },
-      );
-    } catch (err) {
-      if (generatedAddress !== null) {
-        // Roll back so the user isn't left with a saved key that was never
-        // registered. We surface the address in the thrown error so they can
-        // retry with `update-signers --add-eoa-addresses <addr>` if desired.
-        await removeKey().catch(() => undefined);
-        const message = err instanceof Error ? err.message : String(err);
-        throw new Error(
-          `Failed to register generated EOA ${generatedAddress}: ${message}\n` +
-            `The local key was rolled back. To re-register the same address, ` +
-            `first restore it with \`auth import-key\` and then run ` +
-            `\`update-signers --add-eoa-addresses ${generatedAddress}\`.`,
-        );
-      }
-      throw err;
-    }
+    const result = await apiRequest<{ data?: { signUrl?: string } }>(
+      env,
+      "/proposals/update_signers",
+      { method: "POST", body },
+    );
 
     if (result.data?.signUrl) {
       process.stdout.write(`Sign URL: ${result.data.signUrl}\n`);
     }
-    return {
-      ...result,
-      ...(generatedAddress !== null ? { generatedAddress } : {}),
-    };
+    return result;
   },
 });
 

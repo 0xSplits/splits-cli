@@ -54,14 +54,28 @@ echo $PRIVATE_KEY | splits auth import-key
 
 # Remove the local key (does not revoke the on-chain signer)
 splits auth delete-key
-
-# One-shot: generate a key and register it as a signer on an account
-splits accounts update-signers <account> --generate-eoa
 ```
 
 The private key never appears in any command's response — only the derived address and a warning. The file at `~/.splits/config.json` is the only copy; back it up if the key will hold funds.
 
-Once the EOA is a registered authorized signer, sign pending multisig transactions:
+## Registered EOA signers
+
+To use an EOA as a signer on one or more smart accounts, first register it under your user, then attach the returned id via `accounts update-signers`. Registration is a one-time step per address; the same id can be attached to any number of accounts.
+
+```sh
+# Register the local key (or any address you control) so it can be attached
+splits auth register-signer <address> --name "Agent One"
+
+# List registered EOA signers — returns ids needed by update-signers
+splits auth signers
+
+# Attach a registered signer to an account (repeat per account as needed)
+splits accounts update-signers <account> --add-eoa-signer-ids <id>
+```
+
+Registration is idempotent: re-running `register-signer` with the same address returns the same id (and preserves the first name).
+
+Once the EOA is attached to the account's signer set, sign pending multisig transactions:
 
 ```sh
 # Auto-submit when this signature meets threshold (default)
@@ -154,11 +168,12 @@ The MCP server exposes these tools:
 - `accounts_unarchive` — Unarchive a subaccount
 - `accounts_rename` — Rename a subaccount
 - `accounts_create` — Create a new subaccount
-- `accounts_update_signers` — Propose adding/removing signers (supports `--generate-eoa` for one-shot add)
+- `accounts_update_signers` — Propose adding/removing signers (EOA adds reference ids from `auth_register_signer`)
 - `transactions_sign` — Sign a pending multisig transaction with the local EOA
 - `auth_whoami` — Show org, API key source, and local signing key (if any)
 - `auth_login` / `auth_logout` — Save or remove a local API key (stdin-preferred; `--api-key` flag refused under MCP)
 - `auth_create_key` / `auth_delete_key` / `auth_import_key` — Manage a local EOA signing key
+- `auth_register_signer` / `auth_signers` — Register and list EOA signers under the acting user
 - `members_list` — List org members
 - `members_signers` — List passkey signers for a member
 
