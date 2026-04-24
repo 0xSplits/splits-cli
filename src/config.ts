@@ -4,7 +4,7 @@
 // "credentials store" and "identity store" — keep the shape minimal; expand
 // only when a customer actually needs more than one key / API key.
 
-import { promises as fs } from "node:fs";
+import { constants as fsConstants, promises as fs } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -88,11 +88,47 @@ const ensureDir = async (): Promise<void> => {
   gitignoreEnsured = true;
 };
 
+// Atomic, symlink-safe keystore write. The file is the only copy of the
+// user's private key, so a crashed or preempted write must not truncate it,
+// and an attacker-planted symlink must not redirect it.
+//
+// - Refuse if CONFIG_PATH exists and is a symlink (belt-and-suspenders against
+//   O_NOFOLLOW's create-time race window).
+// - Write to a sibling temp file with O_NOFOLLOW + mode 0600 + explicit fchmod
+//   (Node only applies the mode arg on create; an existing file keeps its
+//   current perms).
+// - fs.rename is atomic on the same filesystem, so readers either see the old
+//   file or the complete new one.
 const writeRaw = async (config: Config): Promise<void> => {
   await ensureDir();
-  await fs.writeFile(CONFIG_PATH, JSON.stringify(config, null, 2) + "\n", {
-    mode: 0o600,
-  });
+  try {
+    const st = await fs.lstat(CONFIG_PATH);
+    if (st.isSymbolicLink()) {
+      throw new Error(
+        `Config at ${CONFIG_PATH} is a symlink. Refusing to write through it; ` +
+          `delete it first.`,
+      );
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+
+  const tmp = `${CONFIG_PATH}.tmp.${process.pid}`;
+  const handle = await fs.open(
+    tmp,
+    fsConstants.O_WRONLY |
+      fsConstants.O_CREAT |
+      fsConstants.O_TRUNC |
+      fsConstants.O_NOFOLLOW,
+    0o600,
+  );
+  try {
+    await handle.writeFile(JSON.stringify(config, null, 2) + "\n");
+    await handle.chmod(0o600);
+  } finally {
+    await handle.close();
+  }
+  await fs.rename(tmp, CONFIG_PATH);
 };
 
 // ----- API key / URL -----
