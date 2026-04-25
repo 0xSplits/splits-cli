@@ -83,7 +83,7 @@ export async function signTransactionLocally(
   ): Promise<SignResponse> => {
     const signature = await signHash(privateKey, signingHash);
     return httpRequest<SignResponse>(env, `/transactions/${txId}/sign`, {
-      method: "POST",
+      method: "PUT",
       requireAuth: true,
       body: {
         eoaSigner: account.address,
