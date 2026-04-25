@@ -1,50 +1,139 @@
 #!/usr/bin/env node
 import { Cli, z } from "incur";
+import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 
+import {
+  CONFIG_FILE_PATH,
+  defaultKeyName,
+  loadLocalKeyPublic,
+  removeApiKey,
+  removeKey,
+  resolveApiKey,
+  saveApiKey,
+  saveKey,
+} from "./config.js";
+import { httpRequest, SplitsApiError } from "./http.js";
 import { evmAddress, transactionId } from "./schemas.js";
+import { signTransactionLocally } from "./signing.js";
 
 const cli = Cli.create("splits", {
   version: "0.0.1",
   description: "Splits CLI — programmatic access to the Splits platform",
 });
 
-// Auth config (reads from env)
+// Auth config (reads from env; both values also resolvable from
+// ~/.splits/config.json via `splits auth login`). Env takes precedence.
 const authEnv = z.object({
   SPLITS_API_KEY: z
     .string()
-    .describe("Splits API key (sk_read_... or legacy hex key)"),
+    .optional()
+    .describe(
+      "Splits API key (sk_read_... or legacy hex key). " +
+        "Falls back to the key saved by `splits auth login` when unset.",
+    ),
   SPLITS_API_URL: z
     .string()
-    .default("https://server.production.splits.org")
-    .describe("Splits API base URL"),
+    .optional()
+    .describe(
+      "Splits API base URL. " +
+        "Falls back to the URL saved by `splits auth login`, then to the production URL.",
+    ),
 });
 
-// Helper: make authenticated request
-async function apiRequest(
-  env: { SPLITS_API_KEY: string; SPLITS_API_URL: string },
+type AuthEnv = z.infer<typeof authEnv>;
+
+// Shortcut: forward to the shared http helper with auth required.
+const apiRequest = <T = unknown>(
+  env: AuthEnv,
   path: string,
   options?: {
     method?: "GET" | "PUT" | "POST" | "DELETE";
     body?: Record<string, unknown>;
   },
-) {
-  const res = await fetch(`${env.SPLITS_API_URL}/public/v1${path}`, {
-    method: options?.method ?? "GET",
-    headers: {
-      Authorization: `Bearer ${env.SPLITS_API_KEY}`,
-      ...(options?.body ? { "Content-Type": "application/json" } : {}),
-    },
-    ...(options?.body ? { body: JSON.stringify(options.body) } : {}),
-  });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
+): Promise<T> => httpRequest<T>(env, path, { ...options, requireAuth: true });
+
+// MCP mode covers both invocations the harness might use: the explicit
+// SPLITS_MCP_MODE=1 env (used in tests) and the documented `npx
+// @splits/splits-cli --mcp` entrypoint that incur's stdio transport uses.
+// Either one gates the secret-flag refusals and stdin-fast-fail.
+const mcpMode = (): boolean =>
+  process.env.SPLITS_MCP_MODE === "1" || process.argv.includes("--mcp");
+
+const STDIN_TIMEOUT_MS = 5_000;
+
+// Read stdin until EOF. Used by `auth login` and `auth import-key` so secrets
+// never appear on the command line. Under MCP, stdin is closed — refuse fast
+// rather than hanging. Under a non-TTY non-MCP path (cron, CI with stdin from
+// /dev/null, orphaned subprocess), time out after STDIN_TIMEOUT_MS so a wedged
+// parent can't hang the CLI indefinitely.
+const readStdin = async (): Promise<string> => {
+  if (process.stdin.isTTY) return "";
+  if (mcpMode()) {
     throw new Error(
-      (body as { error?: { message?: string } })?.error?.message ??
-        `API error: ${res.status}`,
+      "Secrets cannot be piped into an MCP tool call. " +
+        "Run `auth login` / `auth import-key` outside MCP, or set SPLITS_API_KEY in the MCP server's environment.",
     );
   }
-  return res.json();
-}
+
+  const read = (async () => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of process.stdin) {
+      chunks.push(
+        Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string),
+      );
+    }
+    return Buffer.concat(chunks).toString("utf-8").trim();
+  })();
+
+  const timeout = new Promise<never>((_, reject) =>
+    setTimeout(
+      () =>
+        reject(
+          new Error(
+            `No input on stdin after ${STDIN_TIMEOUT_MS / 1000}s. ` +
+              `Pipe a value (e.g. \`echo "$SECRET" | splits auth login\`).`,
+          ),
+        ),
+      STDIN_TIMEOUT_MS,
+    ).unref(),
+  );
+
+  return Promise.race([read, timeout]);
+};
+
+// Helper: refine a CSV string so each comma-separated token is a valid EVM
+// address. Fails client-side before the HTTP call. Uses superRefine so the
+// error message can name the offending token.
+const EVM_ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
+const csvEvmAddresses = (fieldHint: string) =>
+  z
+    .string()
+    .optional()
+    .superRefine((s, ctx) => {
+      if (!s) return;
+      const tokens = s
+        .split(",")
+        .map((x) => x.trim())
+        .filter(Boolean);
+      const bad = tokens.find((t) => !EVM_ADDRESS_RE.test(t));
+      if (bad !== undefined) {
+        ctx.addIssue({
+          code: "custom",
+          message:
+            `${fieldHint} must be a comma-separated list of 0x-prefixed ` +
+            `40-hex-char EVM addresses (invalid: ${bad})`,
+        });
+      }
+    });
+
+// Helper: split a CSV string into trimmed, non-empty tokens.
+const splitCsv = (s: string | undefined): string[] =>
+  s
+    ? s
+        .split(",")
+        .map((x) => x.trim())
+        .filter(Boolean)
+    : [];
 
 // Helper: build query string from params object
 function buildQuery(
@@ -70,10 +159,356 @@ const auth = Cli.create("auth", {
 });
 
 auth.command("whoami", {
-  description: "Show current org, API key name, and scopes",
+  description:
+    "Show current org, API key name, and scopes. " +
+    "Also reports whether credentials came from the environment or the local keystore " +
+    "and any local EOA signing key saved by `splits auth create-key`. When a local " +
+    "key exists and has been registered with the backend, `localKey.signerId` is the " +
+    "id needed by `accounts update-signers --add-eoa-signer-ids`; null means the key " +
+    "exists locally but has not been registered (see `auth register-signer`).",
   env: authEnv,
   async run({ env }) {
-    return apiRequest(env, "/auth/whoami");
+    const resolved = await resolveApiKey(env);
+    if (!resolved) {
+      throw new SplitsApiError(
+        "no-api-key",
+        0,
+        "No API key configured. Run `splits auth login` or export SPLITS_API_KEY.",
+      );
+    }
+    const [response, localKey] = await Promise.all([
+      apiRequest<{ data: Record<string, unknown> }>(env, "/auth/whoami"),
+      loadLocalKeyPublic(),
+    ]);
+
+    let localKeyPayload:
+      | (typeof localKey & { signerId: string | null })
+      | null = null;
+    if (localKey) {
+      // Look up the registered signer id for this address, if any. One extra
+      // GET per whoami, tolerant of failure — whoami is meant to be cheap and
+      // machine-parseable, not a hard correctness boundary.
+      let signerId: string | null = null;
+      try {
+        const signers = await apiRequest<{
+          data: Array<{ id: string; address: string }>;
+        }>(env, "/eoa_signers");
+        const match = signers.data.find(
+          (s) => s.address.toLowerCase() === localKey.address.toLowerCase(),
+        );
+        signerId = match?.id ?? null;
+      } catch {
+        // Swallow: whoami still reports the local key even if the signer
+        // lookup fails (rate limit, transient 5xx, etc).
+      }
+      localKeyPayload = { ...localKey, signerId };
+    }
+
+    return {
+      ...response,
+      data: {
+        ...response.data,
+        apiKeySource: resolved.source,
+        ...(localKeyPayload ? { localKey: localKeyPayload } : {}),
+      },
+    };
+  },
+});
+
+auth.command("login", {
+  description:
+    "Save a Splits API key to the local config (~/.splits/config.json, mode 0600). " +
+    "Prefer stdin to avoid leaking the key to shell history or tool-call transcripts: " +
+    "  `echo $SPLITS_API_KEY | splits auth login`. " +
+    "The saved key is only used when the SPLITS_API_KEY env var is not set — env always wins.",
+  options: z.object({
+    apiKey: z
+      .string()
+      .optional()
+      .describe(
+        "API key value. Refused under MCP mode; prefer stdin for secrets.",
+      ),
+    apiUrl: z
+      .string()
+      .url()
+      .optional()
+      .describe(
+        "Optional API base URL override to persist alongside the key (e.g. staging).",
+      ),
+  }),
+  async run({ options }) {
+    if (options.apiKey !== undefined && mcpMode()) {
+      throw new Error(
+        "--api-key flag is refused in MCP mode (`--mcp` or SPLITS_MCP_MODE=1). " +
+          "Set SPLITS_API_KEY in the MCP server's environment, or run `auth login` outside MCP.",
+      );
+    }
+
+    let value = options.apiKey ?? (await readStdin());
+    value = value.trim();
+    if (value.length === 0) {
+      throw new Error(
+        "No API key provided. Pass --api-key, pipe via stdin, or export SPLITS_API_KEY.",
+      );
+    }
+
+    await saveApiKey(value, { apiUrl: options.apiUrl });
+
+    const envAlreadySet =
+      typeof process.env.SPLITS_API_KEY === "string" &&
+      process.env.SPLITS_API_KEY.length > 0;
+    if (envAlreadySet) {
+      process.stderr.write(
+        "Warning: SPLITS_API_KEY env var is set and will take precedence. " +
+          "The saved key is used only when the env var is unset.\n",
+      );
+    }
+
+    return {
+      saved: true,
+      source: "keystore" as const,
+      apiUrl: options.apiUrl ?? null,
+      path: CONFIG_FILE_PATH,
+    };
+  },
+});
+
+auth.command("logout", {
+  description:
+    "Remove the saved API key and API URL override from the local config. " +
+    "Does not affect the SPLITS_API_KEY env var or any saved local EOA key — " +
+    "use `splits auth delete-key` to remove a local EOA.",
+  async run() {
+    const result = await removeApiKey();
+    return {
+      loggedOut: true,
+      removedApiKey: result.hadApiKey,
+      removedApiUrl: result.hadApiUrl,
+    };
+  },
+});
+
+auth.command("create-key", {
+  description:
+    "Generate a new local Ethereum EOA and save it to ~/.splits/config.json (mode 0600). " +
+    "The key is used by `splits transactions sign` to approve multisig transactions locally. " +
+    "By default creates the key only; pass --register to also register the address with the " +
+    "backend in one call (equivalent to `create-key` + `register-signer <address>`). On " +
+    "registration failure the local key is removed so the next attempt starts fresh. " +
+    "Refuses if a key already exists — delete it first.",
+  env: authEnv,
+  options: z.object({
+    name: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        "Optional human-readable label. Defaults to a short form of the address.",
+      ),
+    register: z
+      .boolean()
+      .default(false)
+      .describe(
+        "Also register the new address with the backend so it can be attached " +
+          "as a signer. On backend failure the local key is rolled back.",
+      ),
+  }),
+  async run({ env, options }) {
+    const privateKey = generatePrivateKey();
+    const account = privateKeyToAccount(privateKey);
+    const name = options.name ?? defaultKeyName(account.address);
+
+    await saveKey({
+      name,
+      address: account.address,
+      privateKey,
+    });
+
+    type RegisterResponse = {
+      data: {
+        id: string;
+        address: string;
+        name: string | null;
+        email: string | null;
+        lastVerifiedAt: string | null;
+      };
+    };
+
+    let registered: RegisterResponse["data"] | null = null;
+    if (options.register) {
+      try {
+        const result = await apiRequest<RegisterResponse>(env, "/eoa_signers", {
+          method: "POST",
+          body: {
+            address: account.address,
+            ...(options.name !== undefined && { name: options.name }),
+          },
+        });
+        registered = result.data;
+      } catch (err) {
+        // Rollback: the local key is only useful once registered; leaving a
+        // dangling local key with no backend record would confuse the next
+        // run of `create-key` (it refuses when a key exists).
+        await removeKey().catch(() => {
+          // If rollback fails the address is already in the user's
+          // terminal; the re-thrown error below tells them how to recover.
+        });
+        if (err instanceof SplitsApiError) {
+          throw new SplitsApiError(
+            err.splitsCode,
+            err.status,
+            `Registration failed for ${account.address}; local key removed. ` +
+              `Original error: ${err.message}`,
+          );
+        }
+        throw err;
+      }
+    }
+
+    return {
+      name,
+      address: account.address,
+      ...(registered ? { signerId: registered.id } : {}),
+      warning:
+        "This key is the only copy. Back up ~/.splits/config.json. Any CLI dependency can read this file.",
+      path: CONFIG_FILE_PATH,
+    };
+  },
+});
+
+auth.command("delete-key", {
+  description:
+    "Remove the local EOA signing key from ~/.splits/config.json. " +
+    "Does NOT revoke the signer on-chain — if the key was registered via " +
+    "`update-signers`, run that command again (or the web app) to remove it.",
+  async run() {
+    const { previousAddress } = await removeKey();
+    return {
+      deleted: previousAddress !== null,
+      previousAddress,
+    };
+  },
+});
+
+auth.command("import-key", {
+  description:
+    "Import an existing Ethereum private key into the local config. " +
+    "Prefer stdin to avoid leaking the key to shell history or tool-call transcripts: " +
+    "  `echo $PRIVATE_KEY | splits auth import-key`. " +
+    "The derived address is echoed to stderr before writing; the key itself is never returned.",
+  options: z.object({
+    privateKey: z
+      .string()
+      .optional()
+      .describe(
+        "Private key (0x-prefixed or raw hex). Refused under MCP mode; prefer stdin.",
+      ),
+    name: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        "Optional human-readable label. Defaults to a short form of the address.",
+      ),
+  }),
+  async run({ options }) {
+    if (options.privateKey !== undefined && mcpMode()) {
+      throw new Error(
+        "--private-key flag is refused in MCP mode (`--mcp` or SPLITS_MCP_MODE=1). " +
+          "Run `auth import-key` outside MCP so the key doesn't land in the tool-call transcript.",
+      );
+    }
+
+    let raw = options.privateKey ?? (await readStdin());
+    raw = raw.trim();
+    if (raw.length === 0) {
+      throw new Error(
+        "No private key provided. Pass --private-key or pipe via stdin.",
+      );
+    }
+    const normalized = (
+      raw.startsWith("0x") || raw.startsWith("0X")
+        ? `0x${raw.slice(2)}`
+        : `0x${raw}`
+    ) as `0x${string}`;
+
+    // viem validates length, hex shape, and curve-order internally.
+    const account = privateKeyToAccount(normalized);
+    const name = options.name ?? defaultKeyName(account.address);
+
+    process.stderr.write(`Imported address: ${account.address}\n`);
+
+    await saveKey({
+      name,
+      address: account.address,
+      privateKey: normalized,
+    });
+
+    return {
+      name,
+      address: account.address,
+      path: CONFIG_FILE_PATH,
+    };
+  },
+});
+
+auth.command("register-signer", {
+  description:
+    "Register an EOA address with the Splits backend so it can be attached " +
+    "to smart accounts as a signer. Idempotent — re-running with the same " +
+    "address returns the same id (and preserves the first name). The " +
+    "returned id is what `splits accounts update-signers --add-eoa-signer-ids` " +
+    "expects. The address is attributed to the user that owns the API key; " +
+    "you cannot register an address on behalf of another user.",
+  env: authEnv,
+  args: z.object({
+    address: evmAddress.describe("EOA address to register (0x...)"),
+  }),
+  options: z.object({
+    name: z
+      .string()
+      .min(1)
+      .max(200)
+      .optional()
+      .describe(
+        "Optional human-readable name for this signer. First name wins — " +
+          "re-registering with a different name keeps the original.",
+      ),
+  }),
+  async run({ env, args, options }) {
+    const body = {
+      address: args.address,
+      ...(options.name !== undefined && { name: options.name }),
+    };
+    const result = await apiRequest<{
+      data: {
+        id: string;
+        address: string;
+        name: string | null;
+        email: string | null;
+        lastVerifiedAt: string | null;
+      };
+    }>(env, "/eoa_signers", { method: "POST", body });
+    return result;
+  },
+});
+
+auth.command("signers", {
+  description:
+    "List EOA signers registered under the acting user. Returns the ids " +
+    "needed by `splits accounts update-signers --add-eoa-signer-ids` plus " +
+    "each signer's address, display name, and last verification timestamp.",
+  env: authEnv,
+  async run({ env }) {
+    return apiRequest<{
+      data: Array<{
+        id: string;
+        address: string;
+        name: string | null;
+        email: string | null;
+        lastVerifiedAt: string | null;
+      }>;
+    }>(env, "/eoa_signers");
   },
 });
 
@@ -134,9 +569,9 @@ accounts.command("balances", {
   async run({ env, args, options }) {
     let address = args.address;
     if (!address) {
-      const result = (await apiRequest(env, "/org/accounts")) as {
+      const result = await apiRequest<{
         data: Array<{ address: string }>;
-      };
+      }>(env, "/org/accounts");
       if (result.data.length === 1) {
         address = result.data[0].address;
       } else {
@@ -160,6 +595,19 @@ accounts.command("chains", {
   }),
   async run({ env, args }) {
     return apiRequest(env, `/org/accounts/${args.address}/chains`);
+  },
+});
+
+accounts.command("signers", {
+  description:
+    "List passkey and EOA signers (with current threshold) for a subaccount. " +
+    "Returns the signer IDs needed by 'accounts update-signers' to add or remove signers.",
+  env: authEnv,
+  args: z.object({
+    address: evmAddress.describe("Account address (0x...)"),
+  }),
+  async run({ env, args }) {
+    return apiRequest(env, `/org/accounts/${args.address}/signers`);
   },
 });
 
@@ -228,12 +676,9 @@ accounts.command("create", {
       .describe(
         "Comma-separated passkey IDs from 'members signers' (e.g. id1,id2)",
       ),
-    eoaAddresses: z
-      .string()
-      .optional()
-      .describe(
-        "Comma-separated EOA signer addresses (e.g. 0xabc...,0xdef...)",
-      ),
+    eoaAddresses: csvEvmAddresses("--eoa-addresses").describe(
+      "Comma-separated EOA signer addresses (e.g. 0xabc...,0xdef...)",
+    ),
     threshold: z
       .number()
       .int()
@@ -241,15 +686,10 @@ accounts.command("create", {
       .describe("Number of signers required to approve transactions"),
   }),
   async run({ env, options }) {
-    const passkeyIds = options.passkeyIds
-      ? options.passkeyIds.split(",").filter(Boolean)
-      : [];
-    const eoaSigners = options.eoaAddresses
-      ? options.eoaAddresses
-          .split(",")
-          .filter(Boolean)
-          .map((address) => ({ address }))
-      : [];
+    const passkeyIds = splitCsv(options.passkeyIds);
+    const eoaSigners = splitCsv(options.eoaAddresses).map((address) => ({
+      address,
+    }));
     return apiRequest(env, "/org/accounts", {
       method: "POST",
       body: {
@@ -259,6 +699,79 @@ accounts.command("create", {
         threshold: options.threshold,
       },
     });
+  },
+});
+
+accounts.command("update-signers", {
+  description:
+    "Propose adding or removing signers (passkeys and/or EOAs) and/or changing the threshold on a subaccount. " +
+    "EOA adds reference ids returned by `splits auth register-signer`; register the address first, then attach " +
+    "its id here. The same id can be attached to any number of accounts. " +
+    "Primary use case: adding an external (EOA) key so an agent or automation can operate on the account headlessly " +
+    "— passkeys require a biometric 2nd factor that agents cannot provide. " +
+    "The proposal is created immediately; it must be approved and signed on the web via the returned signUrl. " +
+    "Poll 'transactions get <id>' to watch status transition from CREATED to EXECUTED. " +
+    "If this returns 409 SMART_ACCOUNT_STATE_CHANGE_IN_PROGRESS, call 'transactions list --account <address>' " +
+    "to find the pending proposal; it must be signed (web) or cancelled before retrying. " +
+    "Recovery / resetting signers stays web-only. " +
+    "Updates apply to every active network on the org automatically. " +
+    "Use 'accounts signers <address>' to discover existing signer IDs (passkeys and EOAs), and " +
+    "`auth signers` to list the EOA ids registered under the acting user. " +
+    "Requires owner-scoped API key.",
+  env: authEnv,
+  args: z.object({
+    account: evmAddress.describe("Subaccount address (0x...)"),
+  }),
+  options: z.object({
+    addEoaSignerIds: z
+      .string()
+      .optional()
+      .describe(
+        "Comma-separated EOA signer ids (from `auth register-signer` / `auth signers`) to attach. " +
+          "The same id can be attached to multiple accounts.",
+      ),
+    removeEoaIds: z
+      .string()
+      .optional()
+      .describe(
+        "Comma-separated EOA signer IDs (from 'accounts signers <address>') to remove",
+      ),
+    addPasskeyIds: z
+      .string()
+      .optional()
+      .describe(
+        "Comma-separated passkey authenticator IDs to add (from 'members signers')",
+      ),
+    removePasskeyIds: z
+      .string()
+      .optional()
+      .describe(
+        "Comma-separated passkey authenticator IDs to remove (from 'members signers')",
+      ),
+    threshold: z
+      .number()
+      .int()
+      .min(1)
+      .optional()
+      .describe("New signer threshold. Unchanged if omitted."),
+    memo: z.string().optional().describe("Optional memo (max 500 chars)"),
+  }),
+  async run({ env, args, options }) {
+    const body = {
+      account: args.account,
+      addPasskeyIds: splitCsv(options.addPasskeyIds),
+      removePasskeyIds: splitCsv(options.removePasskeyIds),
+      addEoaSignerIds: splitCsv(options.addEoaSignerIds),
+      removeEoaSignerIds: splitCsv(options.removeEoaIds),
+      ...(options.threshold !== undefined && { threshold: options.threshold }),
+      ...(options.memo !== undefined && { memo: options.memo }),
+    } satisfies Record<string, unknown>;
+
+    return apiRequest<{ data?: { signUrl?: string } }>(
+      env,
+      "/proposals/update_signers",
+      { method: "POST", body },
+    );
   },
 });
 
@@ -412,17 +925,19 @@ create.command("transfer", {
       ),
   }),
   async run({ env, options }) {
-    const body: Record<string, unknown> = {
+    const body = {
       account: options.account,
       chainId: options.chainId,
       recipient: options.recipient,
       token: options.token,
       amount: options.amount,
-    };
-    if (options.memo !== undefined) body.memo = options.memo;
-    if (options.name !== undefined) body.name = options.name;
-    if (options.validUntil !== undefined) body.validUntil = options.validUntil;
-    return apiRequest(env, "/proposals/transfer", {
+      ...(options.memo !== undefined && { memo: options.memo }),
+      ...(options.name !== undefined && { name: options.name }),
+      ...(options.validUntil !== undefined && {
+        validUntil: options.validUntil,
+      }),
+    } satisfies Record<string, unknown>;
+    return apiRequest<{ data?: unknown }>(env, "/proposals/transfer", {
       method: "POST",
       body,
     });
@@ -487,15 +1002,17 @@ create.command("custom", {
       ),
   }),
   async run({ env, options }) {
-    const body: Record<string, unknown> = {
+    const body = {
       account: options.account,
       chainId: options.chainId,
       calls: options.calls,
-    };
-    if (options.memo !== undefined) body.memo = options.memo;
-    if (options.name !== undefined) body.name = options.name;
-    if (options.validUntil !== undefined) body.validUntil = options.validUntil;
-    return apiRequest(env, "/proposals/custom", {
+      ...(options.memo !== undefined && { memo: options.memo }),
+      ...(options.name !== undefined && { name: options.name }),
+      ...(options.validUntil !== undefined && {
+        validUntil: options.validUntil,
+      }),
+    } satisfies Record<string, unknown>;
+    return apiRequest<{ data?: unknown }>(env, "/proposals/custom", {
       method: "POST",
       body,
     });
@@ -522,6 +1039,31 @@ transactions.command("cancel", {
     return apiRequest(env, `/proposals/${args.id}`, {
       method: "DELETE",
     });
+  },
+});
+
+transactions.command("sign", {
+  description:
+    "Sign a pending multisig transaction with the local EOA saved by " +
+    "`splits auth create-key` or `splits auth import-key`. " +
+    "Fetches the transaction's signingHash, produces a personal_sign signature locally, " +
+    "and submits it via POST /public/v1/transactions/:id/sign. " +
+    "By default auto-submits the UserOp when this signature meets threshold; " +
+    "pass --no-submit to record only. Retries once on a stale signer nonce.",
+  env: authEnv,
+  args: z.object({
+    id: transactionId.describe("Transaction ID to sign"),
+  }),
+  options: z.object({
+    noSubmit: z
+      .boolean()
+      .default(false)
+      .describe(
+        "Record the signature but do not auto-submit the UserOp even if this signature meets threshold.",
+      ),
+  }),
+  async run({ env, args, options }) {
+    return signTransactionLocally(env, args.id, { submit: !options.noSubmit });
   },
 });
 
@@ -635,9 +1177,9 @@ chains.command("get", {
     chainId: z.number().describe("Chain ID (e.g. 1, 8453)"),
   }),
   async run({ env, args }) {
-    const result = (await apiRequest(env, "/chains")) as {
+    const result = await apiRequest<{
       data: Array<{ chainId: number }>;
-    };
+    }>(env, "/chains");
     const chain = result.data.find((c) => c.chainId === args.chainId);
     if (!chain) {
       throw new Error(`Chain not found: ${args.chainId}`);
@@ -722,39 +1264,18 @@ cli.command(automations);
 // org (unauthenticated commands)
 // =============================================================================
 
-// Env for commands that don't require an API key
+// Env for commands that don't require an API key. Shares URL resolution with
+// authenticated commands so `auth login --api-url <staging>` affects public
+// routes too (instead of silently falling back to production).
 const publicEnv = z.object({
   SPLITS_API_URL: z
     .string()
-    .default("https://server.production.splits.org")
-    .describe("Splits API base URL"),
+    .optional()
+    .describe(
+      "Splits API base URL. " +
+        "Falls back to the URL saved by `splits auth login`, then to the production URL.",
+    ),
 });
-
-// Request helper without auth header for unauthenticated endpoints
-async function publicRequest(
-  env: { SPLITS_API_URL: string },
-  path: string,
-  options?: {
-    method?: "GET" | "POST";
-    body?: Record<string, unknown>;
-  },
-) {
-  const res = await fetch(`${env.SPLITS_API_URL}/public/v1${path}`, {
-    method: options?.method ?? "GET",
-    headers: {
-      ...(options?.body ? { "Content-Type": "application/json" } : {}),
-    },
-    ...(options?.body ? { body: JSON.stringify(options.body) } : {}),
-  });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(
-      (body as { error?: { message?: string } })?.error?.message ??
-        `API error: ${res.status}`,
-    );
-  }
-  return res.json();
-}
 
 const org = Cli.create("org", {
   description: "Organization management",
@@ -773,8 +1294,9 @@ org.command("create", {
       ),
   }),
   async run({ env, options }) {
-    return publicRequest(env, "/auth/send-create-org-link", {
+    return httpRequest(env, "/auth/send-create-org-link", {
       method: "POST",
+      requireAuth: false,
       body: { email: options.email },
     });
   },
