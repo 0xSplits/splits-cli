@@ -31,7 +31,7 @@ export SPLITS_API_KEY=sk_...
 ```sh
 # List transactions
 splits transactions list
-splits transactions list --chainId 1 --limit 100
+splits transactions list --chain-id 1 --limit 100
 splits transactions list --account 0x... --cursor <cursor>
 
 # Get a specific transaction
@@ -42,6 +42,41 @@ splits transactions update-gas-estimation <id>
 ```
 
 For multisig transactions, gas can only be refreshed when exactly one signer remains.
+
+#### Filtering
+
+`splits transactions list` accepts the same filter set as the Accounting view in the web app:
+
+```sh
+# Filter by inflow / outflow
+splits transactions list --direction inbound
+splits transactions list --direction outbound
+
+# Filter by USD value range (compared against absolute value)
+splits transactions list --min-amount 100 --max-amount 10000
+
+# Filter by date range (endDate is EXCLUSIVE)
+splits transactions list --start-date 2026-03-01 --end-date 2026-04-01
+
+# Or use a period shorthand (resolved in your local timezone)
+splits transactions list --period thisMonth
+splits transactions list --period lastMonth
+splits transactions list --period last30Days
+
+# Search by memo (case-insensitive substring; min 3 chars; combine with another filter)
+splits transactions list --memo "payroll" --chain-id 8453
+
+# Multi-account: comma-separated addresses
+splits transactions list --account 0xa...,0xb...
+
+# Combined: find a ~$5k outbound payment to Acme last month
+splits transactions list --period lastMonth --memo "Acme" \
+  --min-amount 4500 --max-amount 5500 --direction outbound
+```
+
+Each row in the response includes a `direction` field (`inbound` or `outbound`) so you can verify the filter result. Splits-initiated transactions are always `outbound`.
+
+`--period` is mutually exclusive with `--start-date` / `--end-date`. Valid period values: `thisWeek`, `thisMonth`, `thisYear`, `lastWeek`, `lastMonth`, `lastYear`, `last30Days`, `last90Days`, `last6Months`.
 
 ### Accounts
 
