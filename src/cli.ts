@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 import { Cli, z } from "incur";
 
+import { PERIODS, resolvePeriod, type Period } from "./periods.js";
 import { evmAddress, transactionId } from "./schemas.js";
+
+const AMOUNT_REGEX = /^(0|[1-9]\d*)(\.\d+)?$/;
 
 const cli = Cli.create("splits", {
   version: "0.0.1",
@@ -273,7 +276,11 @@ const transactions = Cli.create("transactions", {
 });
 
 transactions.command("list", {
-  description: "List transactions for your org",
+  description:
+    "List transactions for your org with optional filters. Examples: " +
+    "find ~$5k payment to Acme last month: { period: 'lastMonth', memo: 'Acme', minAmount: '4500', maxAmount: '5500', direction: 'outbound' }; " +
+    "all inbound activity this year on Base: { chainId: 8453, period: 'thisYear', direction: 'inbound' }; " +
+    "specific transaction by memo with explicit dates: { memo: 'Q1 payroll', startDate: '2026-01-01T00:00:00Z', endDate: '2026-04-01T00:00:00Z' }",
   env: authEnv,
   options: z.object({
     chainId: z.number().optional().describe("Filter by chain ID"),
@@ -283,19 +290,106 @@ transactions.command("list", {
       .max(200)
       .default(50)
       .describe("Max results to return"),
-    account: z.string().optional().describe("Filter by account address"),
+    account: z
+      .string()
+      .optional()
+      .describe(
+        "Filter by smart account address. Single address or comma-separated list (e.g. '0xa…,0xb…'). Results union across all listed accounts.",
+      ),
+    direction: z
+      .enum(["inbound", "outbound"])
+      .optional()
+      .describe(
+        "Filter by money flow. 'inbound' returns only inbound asset transfers (excludes splits-initiated transactions, which are always outbound). 'outbound' returns splits transactions plus outbound asset transfers. Omit for both.",
+      ),
+    minAmount: z
+      .string()
+      .regex(AMOUNT_REGEX, "Must be a non-negative decimal (e.g. '1500.50')")
+      .optional()
+      .describe(
+        "Inclusive lower bound on the absolute USD value. Positive decimal string (e.g. '1500.50'). Sign-agnostic — '1500' matches both +$1500 and -$1500. Excludes transactions with no resolved USD price.",
+      ),
+    maxAmount: z
+      .string()
+      .regex(AMOUNT_REGEX, "Must be a non-negative decimal (e.g. '1500.50')")
+      .optional()
+      .describe(
+        "Inclusive upper bound on the absolute USD value. Same format as minAmount. Excludes transactions with no resolved USD price.",
+      ),
+    startDate: z
+      .string()
+      .optional()
+      .describe(
+        "Inclusive lower bound on transactionTime. ISO 8601 (YYYY-MM-DD interpreted as local-midnight, then converted to UTC).",
+      ),
+    endDate: z
+      .string()
+      .optional()
+      .describe(
+        "EXCLUSIVE upper bound on transactionTime. ISO 8601. '2026-04-01' does NOT include April 1. Use 2026-04-02 to include April 1.",
+      ),
+    period: z
+      .enum(PERIODS)
+      .optional()
+      .describe(
+        "Date range shorthand resolved in your local timezone. Mutually exclusive with --startDate / --endDate. Valid values: thisWeek, thisMonth, thisYear, lastWeek, lastMonth, lastYear, last30Days, last90Days, last6Months. Omit for all time.",
+      ),
+    memo: z
+      .string()
+      .min(3, "Memo search must be at least 3 characters")
+      .max(500, "Memo search must be at most 500 characters")
+      .optional()
+      .describe(
+        "Case-insensitive substring search across transaction and asset-transfer memos. Min 3, max 500 chars. SQL wildcards (% and _) are escaped, not interpreted. Most efficient combined with --account, --chainId, or a date range.",
+      ),
     cursor: z
       .string()
       .optional()
-      .describe("Pagination cursor from a previous response"),
+      .describe(
+        "Pagination cursor from a previous response. You MUST replay the same filter values used on the request that produced this cursor.",
+      ),
   }),
   async run({ env, options }) {
+    // Mutual exclusion: --period vs explicit dates
+    if (options.period && (options.startDate || options.endDate)) {
+      throw new Error(
+        `Cannot use --period together with --startDate or --endDate. Use one or the other. Valid --period values: ${PERIODS.join(", ")}.`,
+      );
+    }
+
+    // Day-only YYYY-MM-DD inputs are interpreted as local midnight.
+    const normalizeDateInput = (value: string | undefined) => {
+      if (!value) return undefined;
+      // Match plain YYYY-MM-DD (no time component)
+      if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+        const [y, m, d] = value.split("-").map(Number);
+        return new Date(y, m - 1, d).toISOString();
+      }
+      // Otherwise pass through; the API will validate as ISO 8601
+      return value;
+    };
+
+    let startDate = normalizeDateInput(options.startDate);
+    let endDate = normalizeDateInput(options.endDate);
+
+    if (options.period) {
+      const resolved = resolvePeriod(options.period as Period);
+      startDate = resolved.startDate;
+      endDate = resolved.endDate;
+    }
+
     return apiRequest(
       env,
       `/transactions${buildQuery({
         chainId: options.chainId,
         limit: options.limit,
         account: options.account,
+        direction: options.direction,
+        minAmount: options.minAmount,
+        maxAmount: options.maxAmount,
+        startDate,
+        endDate,
+        memo: options.memo,
         cursor: options.cursor,
       })}`,
     );
