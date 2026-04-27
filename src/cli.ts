@@ -475,7 +475,7 @@ create.command("transfer", {
       .string()
       .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid token address")
       .describe(
-        "The token contract address to transfer (use 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE for native ETH)",
+        "The token contract address to transfer",
       ),
     amount: z
       .string()
