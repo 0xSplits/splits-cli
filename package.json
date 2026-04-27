@@ -1,6 +1,6 @@
 {
   "name": "@splits/splits-cli",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "description": "CLI and MCP server for the Splits platform",
   "type": "module",
   "bin": {
@@ -16,7 +16,8 @@
     "release": "npm version patch && pnpm publish --access public"
   },
   "dependencies": {
-    "incur": "^0.3.13"
+    "incur": "^0.3.13",
+    "viem": "^2.48.2"
   },
   "pnpm": {
     "overrides": {
