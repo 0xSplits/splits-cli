@@ -340,7 +340,7 @@ transactions.command("list", {
       .max(500, "Memo search must be at most 500 characters")
       .optional()
       .describe(
-        "Case-insensitive substring search across transaction and asset-transfer memos. Min 3, max 500 chars. SQL wildcards (% and _) are escaped, not interpreted. Most efficient combined with --account, --chainId, or a date range.",
+        "Case-insensitive substring search across transaction and asset-transfer memos. Min 3, max 500 chars. Most efficient combined with --account, --chainId, or a date range.",
       ),
     cursor: z
       .string()
