@@ -113,6 +113,27 @@ const splitCsv = (s: string | undefined): string[] =>
         .filter(Boolean)
     : [];
 
+// Helper: refine a CSV string so each comma-separated token is a valid EVM
+// address. Fails client-side before the HTTP call. Uses superRefine so the
+// error message can name the offending token.
+const EVM_ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
+const csvEvmAddresses = (fieldHint: string) =>
+  z
+    .string()
+    .optional()
+    .superRefine((s, ctx) => {
+      if (!s) return;
+      const bad = splitCsv(s).find((t) => !EVM_ADDRESS_RE.test(t));
+      if (bad !== undefined) {
+        ctx.addIssue({
+          code: "custom",
+          message:
+            `${fieldHint} must be a comma-separated list of 0x-prefixed ` +
+            `40-hex-char EVM addresses (invalid: ${bad})`,
+        });
+      }
+    });
+
 // Helper: build query string from params object
 function buildQuery(
   params: Record<string, string | number | boolean | undefined>,
@@ -662,13 +683,11 @@ accounts.command("create", {
       .describe(
         "Preferred. Comma-separated EOA signer ids from 'auth signers' / 'auth register-signer'.",
       ),
-    eoaAddresses: z
-      .string()
-      .optional()
-      .describe(
-        "Comma-separated EOA signer addresses. Each must already be registered to your acting user " +
-          "via 'auth register-signer'. Convenience alternative to `--eoa-signer-ids`.",
-      ),
+    eoaAddresses: csvEvmAddresses("--eoa-addresses").describe(
+      "Comma-separated EOA signer addresses. Each must already be registered " +
+        "to your acting user via 'auth register-signer'. Convenience " +
+        "alternative to `--eoa-signer-ids`.",
+    ),
     threshold: z
       .number()
       .int()
@@ -722,14 +741,12 @@ accounts.command("update-signers", {
         "Preferred. Comma-separated EOA signer ids (from `auth register-signer` / `auth signers`) to attach. " +
           "The same id can be attached to multiple accounts.",
       ),
-    addEoaAddresses: z
-      .string()
-      .optional()
-      .describe(
-        "Comma-separated EOA signer addresses to attach. Each must already be registered to your acting " +
-          "user via `auth register-signer`. Convenience alternative to `--add-eoa-signer-ids` when you have " +
-          "the address but not the id.",
-      ),
+    addEoaAddresses: csvEvmAddresses("--add-eoa-addresses").describe(
+      "Comma-separated EOA signer addresses to attach. Each must already be " +
+        "registered to your acting user via `auth register-signer`. " +
+        "Convenience alternative to `--add-eoa-signer-ids` when you have the " +
+        "address but not the id.",
+    ),
     removeEoaIds: z
       .string()
       .optional()
