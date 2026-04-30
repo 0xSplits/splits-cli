@@ -104,31 +104,6 @@ const readStdin = async (): Promise<string> => {
   return Promise.race([read, timeout]);
 };
 
-// Helper: refine a CSV string so each comma-separated token is a valid EVM
-// address. Fails client-side before the HTTP call. Uses superRefine so the
-// error message can name the offending token.
-const EVM_ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
-const csvEvmAddresses = (fieldHint: string) =>
-  z
-    .string()
-    .optional()
-    .superRefine((s, ctx) => {
-      if (!s) return;
-      const tokens = s
-        .split(",")
-        .map((x) => x.trim())
-        .filter(Boolean);
-      const bad = tokens.find((t) => !EVM_ADDRESS_RE.test(t));
-      if (bad !== undefined) {
-        ctx.addIssue({
-          code: "custom",
-          message:
-            `${fieldHint} must be a comma-separated list of 0x-prefixed ` +
-            `40-hex-char EVM addresses (invalid: ${bad})`,
-        });
-      }
-    });
-
 // Helper: split a CSV string into trimmed, non-empty tokens.
 const splitCsv = (s: string | undefined): string[] =>
   s
@@ -669,7 +644,9 @@ accounts.command("rename", {
 accounts.command("create", {
   description:
     "Create a new subaccount with specified signers and threshold. " +
-    "Use 'members signers <userId>' to discover passkey IDs. Requires owner-scoped API key.",
+    "Use 'members signers <userId>' to discover passkey IDs and " +
+    "'auth signers' to discover EOA signer ids (register new ones with " +
+    "'auth register-signer' first). Requires owner-scoped API key.",
   env: authEnv,
   options: z.object({
     name: z.string().min(1).max(255).describe("Account name (max 255 chars)"),
@@ -679,9 +656,19 @@ accounts.command("create", {
       .describe(
         "Comma-separated passkey IDs from 'members signers' (e.g. id1,id2)",
       ),
-    eoaAddresses: csvEvmAddresses("--eoa-addresses").describe(
-      "Comma-separated EOA signer addresses (e.g. 0xabc...,0xdef...)",
-    ),
+    eoaSignerIds: z
+      .string()
+      .optional()
+      .describe(
+        "Preferred. Comma-separated EOA signer ids from 'auth signers' / 'auth register-signer'.",
+      ),
+    eoaAddresses: z
+      .string()
+      .optional()
+      .describe(
+        "Comma-separated EOA signer addresses. Each must already be registered to your acting user " +
+          "via 'auth register-signer'. Convenience alternative to `--eoa-signer-ids`.",
+      ),
     threshold: z
       .number()
       .int()
@@ -690,6 +677,7 @@ accounts.command("create", {
   }),
   async run({ env, options }) {
     const passkeyIds = splitCsv(options.passkeyIds);
+    const eoaSignerIds = splitCsv(options.eoaSignerIds);
     const eoaSigners = splitCsv(options.eoaAddresses).map((address) => ({
       address,
     }));
@@ -698,6 +686,7 @@ accounts.command("create", {
       body: {
         name: options.name,
         passkeyIds,
+        eoaSignerIds,
         eoaSigners,
         threshold: options.threshold,
       },
@@ -730,8 +719,16 @@ accounts.command("update-signers", {
       .string()
       .optional()
       .describe(
-        "Comma-separated EOA signer ids (from `auth register-signer` / `auth signers`) to attach. " +
+        "Preferred. Comma-separated EOA signer ids (from `auth register-signer` / `auth signers`) to attach. " +
           "The same id can be attached to multiple accounts.",
+      ),
+    addEoaAddresses: z
+      .string()
+      .optional()
+      .describe(
+        "Comma-separated EOA signer addresses to attach. Each must already be registered to your acting " +
+          "user via `auth register-signer`. Convenience alternative to `--add-eoa-signer-ids` when you have " +
+          "the address but not the id.",
       ),
     removeEoaIds: z
       .string()
@@ -765,6 +762,9 @@ accounts.command("update-signers", {
       addPasskeyIds: splitCsv(options.addPasskeyIds),
       removePasskeyIds: splitCsv(options.removePasskeyIds),
       addEoaSignerIds: splitCsv(options.addEoaSignerIds),
+      addEoaSigners: splitCsv(options.addEoaAddresses).map((address) => ({
+        address,
+      })),
       removeEoaSignerIds: splitCsv(options.removeEoaIds),
       ...(options.threshold !== undefined && { threshold: options.threshold }),
       ...(options.memo !== undefined && { memo: options.memo }),
