@@ -14,7 +14,7 @@ import {
 } from "./config.js";
 import { httpRequest, SplitsApiError } from "./http.js";
 import { PERIODS, resolvePeriod, type Period } from "./periods.js";
-import { evmAddress, transactionId } from "./schemas.js";
+import { bytes32Hash, evmAddress, transactionId } from "./schemas.js";
 import { signTransactionLocally } from "./signing.js";
 
 const AMOUNT_REGEX = /^(0|[1-9]\d*)(\.\d+)?$/;
@@ -810,7 +810,9 @@ transactions.command("list", {
     "List transactions for your org with optional filters. Examples: " +
     "find ~$5k payment to Acme last month: { period: 'lastMonth', memo: 'Acme', minAmount: '4500', maxAmount: '5500', direction: 'outbound' }; " +
     "all inbound activity this year on Base: { chainId: 8453, period: 'thisYear', direction: 'inbound' }; " +
-    "specific transaction by memo with explicit dates: { memo: 'Q1 payroll', startDate: '2026-01-01T00:00:00Z', endDate: '2026-04-01T00:00:00Z' }",
+    "specific transaction by memo with explicit dates: { memo: 'Q1 payroll', startDate: '2026-01-01T00:00:00Z', endDate: '2026-04-01T00:00:00Z' }; " +
+    "look up a transaction by its user-op hash returned from 'transactions sign': { userOpHash: '0x1dfe…dcf' }; " +
+    "look up an on-chain transaction by hash: { transactionHash: '0xabc…def', chainId: 8453 }",
   env: authEnv,
   options: z.object({
     chainId: z.number().optional().describe("Filter by chain ID"),
@@ -878,6 +880,16 @@ transactions.command("list", {
       .describe(
         "Pagination cursor from a previous response. You MUST replay the same filter values used on the request that produced this cursor.",
       ),
+    transactionHash: bytes32Hash
+      .optional()
+      .describe(
+        "Filter by on-chain transaction hash (0x-prefixed, 32 bytes). Matches splits-initiated transactions and asset transfers in your org. Combine with --chainId to disambiguate the same hash across chains.",
+      ),
+    userOpHash: bytes32Hash
+      .optional()
+      .describe(
+        "Filter by ERC-4337 user-operation hash (0x-prefixed, 32 bytes). Returns 0 or 1 result. Only splits-initiated transactions have a userOpHash; asset-transfer rows are excluded when this filter is set. Use this to look up a transaction submitted via 'transactions sign --submit' from the returned userOpHash.",
+      ),
   }),
   async run({ env, options }) {
     // Mutual exclusion: --period vs explicit dates
@@ -921,6 +933,8 @@ transactions.command("list", {
         endDate,
         memo: options.memo,
         cursor: options.cursor,
+        transactionHash: options.transactionHash,
+        userOpHash: options.userOpHash,
       })}`,
     );
   },

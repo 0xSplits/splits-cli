@@ -137,9 +137,18 @@ splits transactions list --account 0xa...,0xb...
 # Combined: find a ~$5k outbound payment to Acme last month
 splits transactions list --period lastMonth --memo "Acme" \
   --min-amount 4500 --max-amount 5500 --direction outbound
+
+# Look up a transaction by its on-chain hash (matches both splits-initiated
+# transactions and asset transfers; combine with --chain-id when the same hash
+# could exist on multiple chains)
+splits transactions list --transaction-hash 0xabc...def --chain-id 8453
+
+# Look up a transaction by its ERC-4337 user-op hash (returned from
+# `transactions sign --submit` and Pimlico webhooks)
+splits transactions list --user-op-hash 0x1dfe...dcf
 ```
 
-Each row in the response includes a `direction` field (`inbound` or `outbound`) so you can verify the filter result. Splits-initiated transactions are always `outbound`.
+Each row in the response includes a `direction` field (`inbound` or `outbound`) so you can verify the filter result. Splits-initiated transactions are always `outbound`. Each row also includes `transactionHash` and `userOpHash` (both nullable) so you can correlate splits records with explorers and bundler webhooks; the same two fields are returned by `splits transactions get`.
 
 `--period` is mutually exclusive with `--start-date` / `--end-date`. Valid period values: `thisWeek`, `thisMonth`, `thisYear`, `lastWeek`, `lastMonth`, `lastYear`, `last30Days`, `last90Days`, `last6Months`.
 
