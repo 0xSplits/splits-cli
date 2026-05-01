@@ -166,8 +166,12 @@ splits accounts unarchive <address>
 splits accounts rename <address> --name "New Name"
 
 # Create a subaccount (requires owner-scoped API key)
+# EOAs must be registered first via `splits auth register-signer <address>`.
+# Prefer ids when you have them; addresses are accepted as a convenience and
+# resolve to ids server-side (each must already be registered to you).
 splits accounts create --name "Operations" --passkeyIds <id1>,<id2> --threshold 1
-splits accounts create --name "Ops" --eoaAddresses 0xabc...,0xdef... --threshold 2
+splits accounts create --name "Ops"  --eoaSignerIds <eoa-id1>,<eoa-id2>     --threshold 2
+splits accounts create --name "Bots" --eoaAddresses 0xabc...,0xdef...        --threshold 1
 ```
 
 ### Members
