@@ -143,8 +143,7 @@ splits transactions list --period lastMonth --memo "Acme" \
 # could exist on multiple chains)
 splits transactions list --transaction-hash 0xabc...def --chain-id 8453
 
-# Look up a transaction by its ERC-4337 user-op hash (returned from
-# `transactions sign --submit` and Pimlico webhooks)
+# Look up a transaction by its ERC-4337 user-op hash
 splits transactions list --user-op-hash 0x1dfe...dcf
 ```
 
