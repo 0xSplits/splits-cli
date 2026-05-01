@@ -104,6 +104,15 @@ const readStdin = async (): Promise<string> => {
   return Promise.race([read, timeout]);
 };
 
+// Helper: split a CSV string into trimmed, non-empty tokens.
+const splitCsv = (s: string | undefined): string[] =>
+  s
+    ? s
+        .split(",")
+        .map((x) => x.trim())
+        .filter(Boolean)
+    : [];
+
 // Helper: refine a CSV string so each comma-separated token is a valid EVM
 // address. Fails client-side before the HTTP call. Uses superRefine so the
 // error message can name the offending token.
@@ -114,11 +123,7 @@ const csvEvmAddresses = (fieldHint: string) =>
     .optional()
     .superRefine((s, ctx) => {
       if (!s) return;
-      const tokens = s
-        .split(",")
-        .map((x) => x.trim())
-        .filter(Boolean);
-      const bad = tokens.find((t) => !EVM_ADDRESS_RE.test(t));
+      const bad = splitCsv(s).find((t) => !EVM_ADDRESS_RE.test(t));
       if (bad !== undefined) {
         ctx.addIssue({
           code: "custom",
@@ -128,15 +133,6 @@ const csvEvmAddresses = (fieldHint: string) =>
         });
       }
     });
-
-// Helper: split a CSV string into trimmed, non-empty tokens.
-const splitCsv = (s: string | undefined): string[] =>
-  s
-    ? s
-        .split(",")
-        .map((x) => x.trim())
-        .filter(Boolean)
-    : [];
 
 // Helper: build query string from params object
 function buildQuery(
@@ -669,7 +665,9 @@ accounts.command("rename", {
 accounts.command("create", {
   description:
     "Create a new subaccount with specified signers and threshold. " +
-    "Use 'members signers <userId>' to discover passkey IDs. Requires owner-scoped API key.",
+    "Use 'members signers <userId>' to discover passkey IDs and " +
+    "'auth signers' to discover EOA signer ids (register new ones with " +
+    "'auth register-signer' first). Requires owner-scoped API key.",
   env: authEnv,
   options: z.object({
     name: z.string().min(1).max(255).describe("Account name (max 255 chars)"),
@@ -679,8 +677,16 @@ accounts.command("create", {
       .describe(
         "Comma-separated passkey IDs from 'members signers' (e.g. id1,id2)",
       ),
+    eoaSignerIds: z
+      .string()
+      .optional()
+      .describe(
+        "Preferred. Comma-separated EOA signer ids from 'auth signers' / 'auth register-signer'.",
+      ),
     eoaAddresses: csvEvmAddresses("--eoa-addresses").describe(
-      "Comma-separated EOA signer addresses (e.g. 0xabc...,0xdef...)",
+      "Comma-separated EOA signer addresses. Each must already be registered " +
+        "to your acting user via 'auth register-signer'. Convenience " +
+        "alternative to `--eoa-signer-ids`.",
     ),
     threshold: z
       .number()
@@ -690,6 +696,7 @@ accounts.command("create", {
   }),
   async run({ env, options }) {
     const passkeyIds = splitCsv(options.passkeyIds);
+    const eoaSignerIds = splitCsv(options.eoaSignerIds);
     const eoaSigners = splitCsv(options.eoaAddresses).map((address) => ({
       address,
     }));
@@ -698,6 +705,7 @@ accounts.command("create", {
       body: {
         name: options.name,
         passkeyIds,
+        eoaSignerIds,
         eoaSigners,
         threshold: options.threshold,
       },
@@ -730,9 +738,15 @@ accounts.command("update-signers", {
       .string()
       .optional()
       .describe(
-        "Comma-separated EOA signer ids (from `auth register-signer` / `auth signers`) to attach. " +
+        "Preferred. Comma-separated EOA signer ids (from `auth register-signer` / `auth signers`) to attach. " +
           "The same id can be attached to multiple accounts.",
       ),
+    addEoaAddresses: csvEvmAddresses("--add-eoa-addresses").describe(
+      "Comma-separated EOA signer addresses to attach. Each must already be " +
+        "registered to your acting user via `auth register-signer`. " +
+        "Convenience alternative to `--add-eoa-signer-ids` when you have the " +
+        "address but not the id.",
+    ),
     removeEoaIds: z
       .string()
       .optional()
@@ -765,6 +779,9 @@ accounts.command("update-signers", {
       addPasskeyIds: splitCsv(options.addPasskeyIds),
       removePasskeyIds: splitCsv(options.removePasskeyIds),
       addEoaSignerIds: splitCsv(options.addEoaSignerIds),
+      addEoaSigners: splitCsv(options.addEoaAddresses).map((address) => ({
+        address,
+      })),
       removeEoaSignerIds: splitCsv(options.removeEoaIds),
       ...(options.threshold !== undefined && { threshold: options.threshold }),
       ...(options.memo !== undefined && { memo: options.memo }),
