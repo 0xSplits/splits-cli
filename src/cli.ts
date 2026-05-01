@@ -957,6 +957,171 @@ transactions.command("memo", {
   },
 });
 
+// -----------------------------------------------------------------------------
+// transactions properties (subgroup)
+// -----------------------------------------------------------------------------
+
+const properties = Cli.create("properties", {
+  description: "Read and write custom JSON metadata on transactions",
+});
+
+// Recursive JSON value zod schema, mirroring the server's shape but without
+// the size cap (server enforces). Allows nested objects/arrays of any standard
+// JSON type. Used by both the --properties option and the typed body the API
+// receives. Top level must be an object whose keys are non-empty strings.
+const jsonValueSchema: z.ZodType<unknown> = z.lazy(() =>
+  z.union([
+    z.string(),
+    z.number(),
+    z.boolean(),
+    z.null(),
+    z.array(jsonValueSchema),
+    z.record(z.string(), jsonValueSchema),
+  ]),
+);
+const propertiesObjectSchema = z.record(z.string().min(1), jsonValueSchema);
+
+// Parse a single `--property key=value` argument into a [key, value] tuple.
+// Splits on the first '=' so values may contain further '=' characters.
+// Throws on missing '=' or empty key.
+const parseProperty = (arg: string): [string, string] => {
+  const eq = arg.indexOf("=");
+  if (eq === -1) {
+    throw new Error(
+      `Invalid --property '${arg}': missing '='. Use key=value format.`,
+    );
+  }
+  const key = arg.slice(0, eq);
+  if (key.length === 0) {
+    throw new Error(`Invalid --property '${arg}': empty key.`);
+  }
+  return [key, arg.slice(eq + 1)];
+};
+
+// Apply --property k=v overlays in order. Last write wins; warns on duplicates
+// to stderr so AI agents don't silently lose data on accidental dup keys.
+const applyPropertyOverlays = (
+  base: Record<string, unknown>,
+  overlays: string[] | undefined,
+): Record<string, unknown> => {
+  if (!overlays || overlays.length === 0) return base;
+  const result: Record<string, unknown> = { ...base };
+  const seen = new Set<string>();
+  for (const arg of overlays) {
+    const [key, value] = parseProperty(arg);
+    if (seen.has(key)) {
+      process.stderr.write(
+        `warning: duplicate --property key '${key}'; last value wins\n`,
+      );
+    }
+    seen.add(key);
+    result[key] = value;
+  }
+  return result;
+};
+
+properties.command("set", {
+  description:
+    "Shallow-merge custom JSON metadata onto a transaction (≤ 500 chars minified).",
+  env: authEnv,
+  args: z.object({
+    id: transactionId.describe("Transaction ID"),
+  }),
+  options: z.object({
+    property: z
+      .array(z.string())
+      .optional()
+      .describe(
+        "Set a single key/value pair as a string; repeatable. Splits on the first '='. Example: --property invoice=INV-42 --property region=us-east. Use 'replace' for non-string types or 'unset' to delete.",
+      ),
+    unset: z
+      .array(z.string())
+      .optional()
+      .describe(
+        "Delete a key from the existing properties; repeatable. Example: --unset oldkey",
+      ),
+  }),
+  async run({ env, args, options }) {
+    if (
+      (!options.property || options.property.length === 0) &&
+      (!options.unset || options.unset.length === 0)
+    ) {
+      throw new Error(
+        "set requires at least one --property or --unset. To clear properties entirely, use 'properties clear'.",
+      );
+    }
+    // Read current state for the merge.
+    const current = await apiRequest<{
+      data?: { properties?: Record<string, unknown> | null };
+    }>(env, `/transactions/${args.id}`);
+    const base: Record<string, unknown> = {
+      ...(current.data?.properties ?? {}),
+    };
+    const merged = applyPropertyOverlays(base, options.property);
+    if (options.unset) {
+      for (const key of options.unset) delete merged[key];
+    }
+    return apiRequest(env, `/transactions/${args.id}`, {
+      method: "PUT",
+      body: { properties: merged },
+    });
+  },
+});
+
+properties.command("replace", {
+  description:
+    "Atomically replace all custom JSON metadata on a transaction (≤ 500 chars minified). Skips read-before-write.",
+  env: authEnv,
+  args: z.object({
+    id: transactionId.describe("Transaction ID"),
+  }),
+  options: z.object({
+    properties: propertiesObjectSchema
+      .optional()
+      .describe(
+        "JSON object literal. Used as the base; any --property overlays are applied on top. To load from a file, use shell substitution: --properties \"$(cat props.json)\"",
+      ),
+    property: z
+      .array(z.string())
+      .optional()
+      .describe(
+        "String key/value overlays applied on top of --properties; repeatable. Splits on the first '='.",
+      ),
+  }),
+  async run({ env, args, options }) {
+    if (
+      options.properties === undefined &&
+      (!options.property || options.property.length === 0)
+    ) {
+      throw new Error(
+        "replace requires at least one of --properties or --property. To clear properties entirely, use 'properties clear'.",
+      );
+    }
+    const base: Record<string, unknown> = options.properties ?? {};
+    const next = applyPropertyOverlays(base, options.property);
+    return apiRequest(env, `/transactions/${args.id}`, {
+      method: "PUT",
+      body: { properties: next },
+    });
+  },
+});
+
+properties.command("clear", {
+  description: "Clear all custom JSON metadata from a transaction.",
+  env: authEnv,
+  args: z.object({
+    id: transactionId.describe("Transaction ID"),
+  }),
+  async run({ env, args }) {
+    return apiRequest(env, `/transactions/${args.id}`, {
+      method: "PUT",
+      body: { properties: null },
+    });
+  },
+});
+
+transactions.command(properties);
+
 transactions.command("update-gas-estimation", {
   description:
     "Update gas estimates for an existing transaction. For multisig, run this when one signer remains.",
@@ -1019,6 +1184,17 @@ create.command("transfer", {
       .max(500)
       .optional()
       .describe("Optional memo for the transaction (max 500 chars)"),
+    properties: propertiesObjectSchema
+      .optional()
+      .describe(
+        "Optional custom JSON metadata. Total minified ≤ 500 chars. Used as the base; any --property overlays are applied on top. To load from a file, use shell substitution: --properties \"$(cat props.json)\"",
+      ),
+    property: z
+      .array(z.string())
+      .optional()
+      .describe(
+        "String key/value overlays for properties; repeatable. Splits on the first '='. Example: --property invoice=INV-42",
+      ),
     name: z
       .string()
       .max(200)
@@ -1034,6 +1210,10 @@ create.command("transfer", {
       ),
   }),
   async run({ env, options }) {
+    const properties =
+      options.properties !== undefined || options.property?.length
+        ? applyPropertyOverlays(options.properties ?? {}, options.property)
+        : undefined;
     const body = {
       account: options.account,
       chainId: options.chainId,
@@ -1041,6 +1221,7 @@ create.command("transfer", {
       token: options.token,
       amount: options.amount,
       ...(options.memo !== undefined && { memo: options.memo }),
+      ...(properties !== undefined && { properties }),
       ...(options.name !== undefined && { name: options.name }),
       ...(options.validUntil !== undefined && {
         validUntil: options.validUntil,
@@ -1096,6 +1277,17 @@ create.command("custom", {
       .max(500)
       .optional()
       .describe("Optional memo for the transaction (max 500 chars)"),
+    properties: propertiesObjectSchema
+      .optional()
+      .describe(
+        "Optional custom JSON metadata. Total minified ≤ 500 chars. Used as the base; any --property overlays are applied on top. To load from a file, use shell substitution: --properties \"$(cat props.json)\"",
+      ),
+    property: z
+      .array(z.string())
+      .optional()
+      .describe(
+        "String key/value overlays for properties; repeatable. Splits on the first '='.",
+      ),
     name: z
       .string()
       .max(200)
@@ -1111,11 +1303,16 @@ create.command("custom", {
       ),
   }),
   async run({ env, options }) {
+    const properties =
+      options.properties !== undefined || options.property?.length
+        ? applyPropertyOverlays(options.properties ?? {}, options.property)
+        : undefined;
     const body = {
       account: options.account,
       chainId: options.chainId,
       calls: options.calls,
       ...(options.memo !== undefined && { memo: options.memo }),
+      ...(properties !== undefined && { properties }),
       ...(options.name !== undefined && { name: options.name }),
       ...(options.validUntil !== undefined && {
         validUntil: options.validUntil,
