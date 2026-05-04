@@ -2,7 +2,22 @@
 // unauthenticated request paths so error parsing, timeouts, and the
 // SplitsApiError shape stay in one place.
 
+import { createRequire } from "node:module";
+
 import { resolveApiKey, resolveApiUrl } from "./config.js";
+
+// Build the User-Agent the backend's `detectPublicApiSource` parses to tag
+// transactions with their origin (CLI vs. MCP vs. raw API). Without this
+// header Node's default fetch sends nothing identifying, so MCP-driven
+// proposals were being recorded as plain "API" calls.
+const { version: PACKAGE_VERSION } = createRequire(import.meta.url)(
+  "../package.json",
+) as { version: string };
+
+const IS_MCP_MODE =
+  process.env.SPLITS_MCP_MODE === "1" || process.argv.includes("--mcp");
+
+const USER_AGENT = `splits-cli/${PACKAGE_VERSION}${IS_MCP_MODE ? " (mcp)" : ""}`;
 
 // Typed error thrown by httpRequest so callers (including MCP consumers) can
 // branch on machine-readable backend error codes like SELF_TAKEOVER_BLOCKED,
@@ -41,7 +56,7 @@ export async function httpRequest<T = unknown>(
   path: string,
   options: HttpOptions,
 ): Promise<T> {
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = { "User-Agent": USER_AGENT };
   if (options.requireAuth) {
     const resolved = await resolveApiKey(env);
     if (!resolved) {
