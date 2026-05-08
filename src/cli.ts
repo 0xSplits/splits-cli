@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { Cli, z } from "incur";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 
@@ -19,8 +23,17 @@ import { signTransactionLocally } from "./signing.js";
 
 const AMOUNT_REGEX = /^(0|[1-9]\d*)(\.\d+)?$/;
 
+const packageJsonPath = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "package.json",
+);
+const { version: cliVersion } = JSON.parse(
+  readFileSync(packageJsonPath, "utf8"),
+) as { version: string };
+
 const cli = Cli.create("splits", {
-  version: "0.0.1",
+  version: cliVersion,
   description: "Splits CLI — programmatic access to the Splits platform",
 });
 
@@ -1093,7 +1106,7 @@ properties.command("replace", {
     properties: propertiesObjectSchema
       .optional()
       .describe(
-        "JSON object literal. Used as the base; any --property overlays are applied on top. To load from a file, use shell substitution: --properties \"$(cat props.json)\"",
+        'JSON object literal. Used as the base; any --property overlays are applied on top. To load from a file, use shell substitution: --properties "$(cat props.json)"',
       ),
     property: z
       .array(z.string())
@@ -1201,7 +1214,7 @@ create.command("transfer", {
     properties: propertiesObjectSchema
       .optional()
       .describe(
-        "Optional custom JSON metadata. Total minified ≤ 500 chars. Used as the base; any --property overlays are applied on top. To load from a file, use shell substitution: --properties \"$(cat props.json)\"",
+        'Optional custom JSON metadata. Total minified ≤ 500 chars. Used as the base; any --property overlays are applied on top. To load from a file, use shell substitution: --properties "$(cat props.json)"',
       ),
     property: z
       .array(z.string())
@@ -1294,7 +1307,7 @@ create.command("custom", {
     properties: propertiesObjectSchema
       .optional()
       .describe(
-        "Optional custom JSON metadata. Total minified ≤ 500 chars. Used as the base; any --property overlays are applied on top. To load from a file, use shell substitution: --properties \"$(cat props.json)\"",
+        'Optional custom JSON metadata. Total minified ≤ 500 chars. Used as the base; any --property overlays are applied on top. To load from a file, use shell substitution: --properties "$(cat props.json)"',
       ),
     property: z
       .array(z.string())
