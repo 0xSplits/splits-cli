@@ -1007,6 +1007,27 @@ const jsonValueSchema: z.ZodType<unknown> = z.lazy(() =>
   ]),
 );
 const propertiesObjectSchema = z.record(z.string().min(1), jsonValueSchema);
+const propertiesOptionSchema = z.union([propertiesObjectSchema, z.string()]);
+
+const parsePropertiesOption = (
+  value: z.infer<typeof propertiesOptionSchema> | undefined,
+): Record<string, unknown> | undefined => {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") return value;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error("Invalid JSON object literal for --properties.");
+  }
+
+  const result = propertiesObjectSchema.safeParse(parsed);
+  if (!result.success) {
+    throw new Error("--properties must be a JSON object with non-empty keys.");
+  }
+  return result.data;
+};
 
 // Parse a single `--property key=value` argument into a [key, value] tuple.
 // Splits on the first '=' so values may contain further '=' characters.
@@ -1055,6 +1076,11 @@ properties.command("set", {
     id: transactionId.describe("Transaction ID"),
   }),
   options: z.object({
+    properties: propertiesOptionSchema
+      .optional()
+      .describe(
+        'JSON object literal to shallow-merge into existing properties. Any --property overlays are applied on top. To load from a file, use shell substitution: --properties "$(cat props.json)"',
+      ),
     property: z
       .array(z.string())
       .optional()
@@ -1070,13 +1096,15 @@ properties.command("set", {
   }),
   async run({ env, args, options }) {
     if (
+      options.properties === undefined &&
       (!options.property || options.property.length === 0) &&
       (!options.unset || options.unset.length === 0)
     ) {
       throw new Error(
-        "set requires at least one --property or --unset. To clear properties entirely, use 'properties clear'.",
+        "set requires at least one --properties, --property, or --unset. To clear properties entirely, use 'properties clear'.",
       );
     }
+    const properties = parsePropertiesOption(options.properties);
     // Read current state for the merge.
     const current = await apiRequest<{
       data?: { properties?: Record<string, unknown> | null };
@@ -1084,7 +1112,10 @@ properties.command("set", {
     const base: Record<string, unknown> = {
       ...(current.data?.properties ?? {}),
     };
-    const merged = applyPropertyOverlays(base, options.property);
+    const merged = applyPropertyOverlays(
+      { ...base, ...(properties ?? {}) },
+      options.property,
+    );
     if (options.unset) {
       for (const key of options.unset) delete merged[key];
     }
@@ -1103,7 +1134,7 @@ properties.command("replace", {
     id: transactionId.describe("Transaction ID"),
   }),
   options: z.object({
-    properties: propertiesObjectSchema
+    properties: propertiesOptionSchema
       .optional()
       .describe(
         'JSON object literal. Used as the base; any --property overlays are applied on top. To load from a file, use shell substitution: --properties "$(cat props.json)"',
@@ -1124,7 +1155,8 @@ properties.command("replace", {
         "replace requires at least one of --properties or --property. To clear properties entirely, use 'properties clear'.",
       );
     }
-    const base: Record<string, unknown> = options.properties ?? {};
+    const base: Record<string, unknown> =
+      parsePropertiesOption(options.properties) ?? {};
     const next = applyPropertyOverlays(base, options.property);
     return apiRequest(env, `/transactions/${args.id}`, {
       method: "PUT",
@@ -1211,7 +1243,7 @@ create.command("transfer", {
       .max(500)
       .optional()
       .describe("Optional memo for the transaction (max 500 chars)"),
-    properties: propertiesObjectSchema
+    properties: propertiesOptionSchema
       .optional()
       .describe(
         'Optional custom JSON metadata. Total minified ≤ 500 chars. Used as the base; any --property overlays are applied on top. To load from a file, use shell substitution: --properties "$(cat props.json)"',
@@ -1239,7 +1271,10 @@ create.command("transfer", {
   async run({ env, options }) {
     const properties =
       options.properties !== undefined || options.property?.length
-        ? applyPropertyOverlays(options.properties ?? {}, options.property)
+        ? applyPropertyOverlays(
+            parsePropertiesOption(options.properties) ?? {},
+            options.property,
+          )
         : undefined;
     const body = {
       account: options.account,
@@ -1304,7 +1339,7 @@ create.command("custom", {
       .max(500)
       .optional()
       .describe("Optional memo for the transaction (max 500 chars)"),
-    properties: propertiesObjectSchema
+    properties: propertiesOptionSchema
       .optional()
       .describe(
         'Optional custom JSON metadata. Total minified ≤ 500 chars. Used as the base; any --property overlays are applied on top. To load from a file, use shell substitution: --properties "$(cat props.json)"',
@@ -1332,7 +1367,10 @@ create.command("custom", {
   async run({ env, options }) {
     const properties =
       options.properties !== undefined || options.property?.length
-        ? applyPropertyOverlays(options.properties ?? {}, options.property)
+        ? applyPropertyOverlays(
+            parsePropertiesOption(options.properties) ?? {},
+            options.property,
+          )
         : undefined;
     const body = {
       account: options.account,
