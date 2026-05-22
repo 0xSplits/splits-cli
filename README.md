@@ -104,6 +104,15 @@ splits transactions update-gas-estimation <id>
 # Sign a pending multisig transaction with the local EOA
 splits transactions sign <id>
 splits transactions sign <id> --no-submit
+
+# Shallow-merge custom JSON metadata onto an existing transaction
+splits transactions properties set <id> \
+  --properties '{"email":"user@example.com","invoiceId":"ETHGLOBAL-42"}'
+splits transactions properties set <id> --property invoice=ETHGLOBAL-42
+
+# Replace or clear all custom metadata
+splits transactions properties replace <id> --properties '{"userId":420}'
+splits transactions properties clear <id>
 ```
 
 For multisig transactions, gas can only be refreshed when exactly one signer remains. `transactions sign` requires a local EOA (see "Local signing key" above) and that the address is already an authorized signer on the transaction's smart account.
