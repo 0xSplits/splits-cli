@@ -1,0 +1,5 @@
+overrides:
+  "@modelcontextprotocol/sdk": "1.27.1"
+
+allowBuilds:
+  esbuild: true

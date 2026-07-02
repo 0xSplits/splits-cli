@@ -1,6 +1,6 @@
 {
   "name": "@splits/splits-cli",
-  "version": "0.2.9",
+  "version": "0.2.10",
   "description": "CLI and MCP server for the Splits platform",
   "type": "module",
   "bin": {
@@ -16,13 +16,8 @@
     "release": "npm version patch && pnpm publish --access public"
   },
   "dependencies": {
-    "incur": "^0.3.13",
+    "incur": "0.3.13",
     "viem": "^2.48.2"
-  },
-  "pnpm": {
-    "overrides": {
-      "@modelcontextprotocol/sdk": "1.27.1"
-    }
   },
   "homepage": "https://splits.org",
   "repository": {
