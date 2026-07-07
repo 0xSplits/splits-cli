@@ -18,7 +18,7 @@ npx @splits/splits-cli <command>
 
 ## Authentication
 
-Get an API key from [Teams Settings](https://teams.splits.org/settings/team/api-keys/). Two options:
+Get an API key from [Splits Settings](https://teams.splits.org/settings/team/api-keys/). Two options:
 
 **Environment variable** (preferred for CI and headless contexts):
 
@@ -237,7 +237,7 @@ The MCP server exposes these tools:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `SPLITS_API_KEY` | No\* | API key from [Teams Settings](https://teams.splits.org/settings/team/api-keys/). Takes precedence over `splits auth login`. |
+| `SPLITS_API_KEY` | No\* | API key from [Splits Settings](https://teams.splits.org/settings/team/api-keys/). Takes precedence over `splits auth login`. |
 | `SPLITS_API_URL` | No | Override the API base URL (defaults to production). Takes precedence over any URL saved by `auth login --api-url`. |
 | `SPLITS_MCP_MODE` | No | Set to `1` when running as an MCP server. Refuses flag-based secrets (`--api-key`, `--private-key`) so secrets don't appear in tool-call transcripts. |
 
