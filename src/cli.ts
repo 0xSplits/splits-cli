@@ -547,8 +547,10 @@ const accounts = Cli.create("accounts", {
     "owned account's signatures: a compromised signer key is bounded by its subaccount " +
     "and is always evictable by the owner one level up (treasury passkeys for " +
     "subaccounts, root for the treasury, recovery wallets for the root), with all " +
-    "addresses unchanged. Web-approval requirements described below are platform " +
-    "policy layered on top; the chain enforces only threshold and ownership.",
+    "addresses unchanged. Eviction is forward-looking only — onchain actions already " +
+    "executed are final and moved funds are not recoverable. Web-approval requirements " +
+    "described below are platform policy layered on top; the chain enforces only " +
+    "threshold and ownership.",
 });
 
 accounts.command("list", {
