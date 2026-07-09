@@ -537,15 +537,18 @@ cli.command(auth);
 const accounts = Cli.create("accounts", {
   description:
     "Manage accounts. Splits accounts are audited ERC-4337 smart accounts " +
-    "(source: github.com/0xSplits/splits-contracts-monorepo) and form a tree: your org " +
-    "root (controlled by your passkeys, with no owner above it) owns each subaccount. " +
+    "(source: github.com/0xSplits/splits-contracts-monorepo) linked by an ownership " +
+    "chain that is fixed at creation and identical on every EVM network " +
+    "(CREATE2-deterministic addresses): recovery wallets own your org's root account, " +
+    "the root owns the treasury, and the treasury owns each subaccount. " +
     "Onchain, signers authorize transactions against a single m-of-n threshold — " +
     "passkeys and EOAs count equally, with no per-signer or per-operation scoping. " +
-    "The parent-as-owner relationship is the recovery mechanism and cannot be altered " +
-    "by any threshold of subaccount signatures: a compromised signer key is bounded by " +
-    "its subaccount and is always evictable by the parent, with the subaccount address " +
-    "unchanged. Web-approval requirements described below are platform policy layered " +
-    "on top of this; the chain enforces only threshold and ownership.",
+    "Ownership is the recovery mechanism and cannot be altered by any threshold of the " +
+    "owned account's signatures: a compromised signer key is bounded by its subaccount " +
+    "and is always evictable by the owner one level up (treasury passkeys for " +
+    "subaccounts, root for the treasury, recovery wallets for the root), with all " +
+    "addresses unchanged. Web-approval requirements described below are platform " +
+    "policy layered on top; the chain enforces only threshold and ownership.",
 });
 
 accounts.command("list", {
@@ -692,7 +695,7 @@ accounts.command("rename", {
 accounts.command("create", {
   description:
     "Create a new subaccount with specified signers and threshold. " +
-    "The subaccount is deployed with your org's parent account as its onchain owner; " +
+    "The subaccount is deployed with your org's treasury account as its onchain owner; " +
     "signers transact, the owner recovers (see 'splits accounts'). " +
     "Use 'members signers <userId>' to discover passkey IDs and " +
     "'auth signers' to discover EOA signer ids (register new ones with " +
