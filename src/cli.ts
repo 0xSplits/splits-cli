@@ -307,7 +307,9 @@ auth.command("create-key", {
     "By default creates the key only; pass --register to also register the address with the " +
     "backend in one call (equivalent to `create-key` + `register-signer <address>`). On " +
     "registration failure the local key is removed so the next attempt starts fresh. " +
-    "Refuses if a key already exists — delete it first.",
+    "Refuses if a key already exists — delete it first. " +
+    "A registered EOA counts toward threshold identically to a passkey; at threshold 1 " +
+    "it can act alone within its subaccount, including on signer-set changes.",
   env: authEnv,
   options: z.object({
     name: z
@@ -471,7 +473,9 @@ auth.command("register-signer", {
     "address returns the same id (and preserves the first name). The " +
     "returned id is what `splits accounts update-signers --add-eoa-signer-ids` " +
     "expects. The address is attributed to the user that owns the API key; " +
-    "you cannot register an address on behalf of another user.",
+    "you cannot register an address on behalf of another user. " +
+    "A registered EOA counts toward threshold identically to a passkey; at threshold 1 " +
+    "it can act alone within its subaccount, including on signer-set changes.",
   env: authEnv,
   args: z.object({
     address: evmAddress.describe("EOA address to register (0x...)"),
@@ -531,7 +535,17 @@ cli.command(auth);
 // =============================================================================
 
 const accounts = Cli.create("accounts", {
-  description: "Manage accounts",
+  description:
+    "Manage accounts. Splits accounts are audited ERC-4337 smart accounts " +
+    "(source: github.com/0xSplits/splits-contracts-monorepo) and form a tree: your org " +
+    "root (controlled by your passkeys, with no owner above it) owns each subaccount. " +
+    "Onchain, signers authorize transactions against a single m-of-n threshold — " +
+    "passkeys and EOAs count equally, with no per-signer or per-operation scoping. " +
+    "The parent-as-owner relationship is the recovery mechanism and cannot be altered " +
+    "by any threshold of subaccount signatures: a compromised signer key is bounded by " +
+    "its subaccount and is always evictable by the parent, with the subaccount address " +
+    "unchanged. Web-approval requirements described below are platform policy layered " +
+    "on top of this; the chain enforces only threshold and ownership.",
 });
 
 accounts.command("list", {
@@ -678,6 +692,8 @@ accounts.command("rename", {
 accounts.command("create", {
   description:
     "Create a new subaccount with specified signers and threshold. " +
+    "The subaccount is deployed with your org's parent account as its onchain owner; " +
+    "signers transact, the owner recovers (see 'splits accounts'). " +
     "Use 'members signers <userId>' to discover passkey IDs and " +
     "'auth signers' to discover EOA signer ids (register new ones with " +
     "'auth register-signer' first). Requires owner-scoped API key.",
@@ -734,10 +750,13 @@ accounts.command("update-signers", {
     "Primary use case: adding an external (EOA) key so an agent or automation can operate on the account headlessly " +
     "— passkeys require a biometric 2nd factor that agents cannot provide. " +
     "The proposal is created immediately; it must be approved and signed on the web via the returned signUrl. " +
+    "(Web approval is platform policy: onchain, any threshold-meeting signature set can also change signers via " +
+    "a directly-submitted UserOp — assume a threshold-meeting EOA can do this and size thresholds accordingly.) " +
     "Poll 'transactions get <id>' to watch status transition from CREATED to EXECUTED. " +
     "If this returns 409 SMART_ACCOUNT_STATE_CHANGE_IN_PROGRESS, call 'transactions list --account <address>' " +
     "to find the pending proposal; it must be signed (web) or cancelled before retrying. " +
-    "Recovery / resetting signers stays web-only. " +
+    "Recovery / resetting signers runs through the parent account's onchain owner rights — contract-enforced, " +
+    "unreachable by subaccount signers, and surfaced only in the web app. " +
     "Updates apply to every active network on the org automatically. " +
     "Use 'accounts signers <address>' to discover existing signer IDs (passkeys and EOAs), and " +
     "`auth signers` to list the EOA ids registered under the acting user. " +
@@ -1420,7 +1439,9 @@ transactions.command("sign", {
     "Fetches the transaction's signingHash, produces a personal_sign signature locally, " +
     "and submits it via POST /public/v1/transactions/:id/sign. " +
     "By default auto-submits the UserOp when this signature meets threshold; " +
-    "pass --no-submit to record only. Retries once on a stale signer nonce.",
+    "pass --no-submit to record only. Retries once on a stale signer nonce. " +
+    "Signing is local; the API call only coordinates. If the Splits API is unavailable, " +
+    "the UserOp can be constructed and submitted directly to a public bundler with the same key.",
   env: authEnv,
   args: z.object({
     id: transactionId.describe("Transaction ID to sign"),
