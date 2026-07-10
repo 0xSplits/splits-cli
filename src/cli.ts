@@ -761,9 +761,10 @@ accounts.command("update-signers", {
     "Poll 'transactions get <id>' to watch status transition from CREATED to EXECUTED. " +
     "If this returns 409 SMART_ACCOUNT_STATE_CHANGE_IN_PROGRESS, call 'transactions list --account <address>' " +
     "to find the pending proposal; it must be signed (web) or cancelled before retrying. " +
-    "Recovery / resetting signers runs through the parent account's onchain owner rights — contract-enforced, " +
-    "unreachable by subaccount signers, and surfaced only in the web app (not applicable to the root account, " +
-    "which has no owner; its signers rotate only via its own threshold). " +
+    "Recovery / resetting signers stays web-only — no CLI or API route exists. " +
+    "(Onchain, recovery runs through the parent account's owner rights — contract-enforced and unreachable " +
+    "by subaccount signers; not applicable to the root account, which has no owner — its signers rotate " +
+    "only via its own threshold.) " +
     "Updates apply to every active network on the org automatically. " +
     "Use 'accounts signers <address>' to discover existing signer IDs (passkeys and EOAs), and " +
     "`auth signers` to list the EOA ids registered under the acting user. " +
