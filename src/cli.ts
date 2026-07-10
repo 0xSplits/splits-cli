@@ -1655,11 +1655,7 @@ const automations = Cli.create("automations", {
 });
 
 automations.command("list", {
-  description:
-    "List automations for your org. Automations run on a dedicated subaccount with a " +
-    "Splits-managed server-wallet signer; each run is validated against the stored " +
-    "policy (chain, token, destination, amount) by the backend before signing — " +
-    "backend-enforced policy, not onchain enforcement.",
+  description: "List automations for your org",
   env: authEnv,
   async run({ env }) {
     return apiRequest(env, "/automations");
