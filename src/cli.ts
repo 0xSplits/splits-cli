@@ -539,16 +539,19 @@ const accounts = Cli.create("accounts", {
     "Manage accounts. Splits accounts are audited ERC-4337 smart accounts " +
     "(source: github.com/0xSplits/splits-contracts-monorepo) linked by an ownership " +
     "chain that is fixed at creation and identical on every EVM network " +
-    "(CREATE2-deterministic addresses): recovery wallets own your org's root account, " +
-    "the root owns the treasury, and the treasury owns each subaccount. " +
+    "(CREATE2-deterministic addresses): your org's root account sits at the top with " +
+    "no owner — your recovery wallets are its m-of-n signer set — the root owns the " +
+    "treasury, and the treasury owns each subaccount. " +
     "Onchain, signers authorize transactions against a single m-of-n threshold — " +
-    "passkeys and EOAs count equally, with no per-signer or per-operation scoping. " +
-    "Ownership is the recovery mechanism and cannot be altered by any threshold of the " +
-    "owned account's signatures: a compromised signer key is bounded by its subaccount " +
-    "and is always evictable by the owner one level up (treasury passkeys for " +
-    "subaccounts, root for the treasury, recovery wallets for the root), with all " +
-    "addresses unchanged. Web-approval requirements described below are platform " +
-    "policy layered on top; the chain enforces only threshold and ownership.",
+    "passkeys and EOAs count equally, with no per-signer or per-operation scoping; " +
+    "implementation upgrades are owner-only and unreachable by an owned account's " +
+    "signers. Ownership is the recovery mechanism and cannot be altered by any " +
+    "threshold of the owned account's signatures: a compromised signer key is bounded " +
+    "by its subaccount and is always evictable by the owner one level up (treasury " +
+    "signers for subaccounts, root for the treasury; the root itself is rotated only " +
+    "by its own signer threshold), with all addresses unchanged. Web-approval " +
+    "requirements described below are platform policy layered on top; the chain " +
+    "enforces only threshold and ownership.",
 });
 
 accounts.command("list", {
@@ -759,7 +762,8 @@ accounts.command("update-signers", {
     "If this returns 409 SMART_ACCOUNT_STATE_CHANGE_IN_PROGRESS, call 'transactions list --account <address>' " +
     "to find the pending proposal; it must be signed (web) or cancelled before retrying. " +
     "Recovery / resetting signers runs through the parent account's onchain owner rights — contract-enforced, " +
-    "unreachable by subaccount signers, and surfaced only in the web app. " +
+    "unreachable by subaccount signers, and surfaced only in the web app (not applicable to the root account, " +
+    "which has no owner; its signers rotate only via its own threshold). " +
     "Updates apply to every active network on the org automatically. " +
     "Use 'accounts signers <address>' to discover existing signer IDs (passkeys and EOAs), and " +
     "`auth signers` to list the EOA ids registered under the acting user. " +
@@ -1444,7 +1448,8 @@ transactions.command("sign", {
     "By default auto-submits the UserOp when this signature meets threshold; " +
     "pass --no-submit to record only. Retries once on a stale signer nonce. " +
     "Signing is local; the API call only coordinates. If the Splits API is unavailable, " +
-    "the UserOp can be constructed and submitted directly to a public bundler with the same key.",
+    "the UserOp can be constructed and submitted directly to a public bundler with the same key " +
+    "using standard ERC-4337 tooling (the CLI does not automate this).",
   env: authEnv,
   args: z.object({
     id: transactionId.describe("Transaction ID to sign"),
@@ -1532,7 +1537,9 @@ tokens.command("metadata", {
 });
 
 tokens.command("whitelist", {
-  description: "List your org's allowlisted tokens",
+  description:
+    "List your org's allowlisted tokens. Token allow/block lists affect display " +
+    "and balance filtering only; they are not enforced at proposal or signing time.",
   env: authEnv,
   async run({ env }) {
     return apiRequest(env, "/tokens/whitelist");
@@ -1540,7 +1547,9 @@ tokens.command("whitelist", {
 });
 
 tokens.command("blocklist", {
-  description: "List your org's blocked tokens",
+  description:
+    "List your org's blocked tokens. Token allow/block lists affect display " +
+    "and balance filtering only; they are not enforced at proposal or signing time.",
   env: authEnv,
   async run({ env }) {
     return apiRequest(env, "/tokens/blocklist");
@@ -1646,7 +1655,11 @@ const automations = Cli.create("automations", {
 });
 
 automations.command("list", {
-  description: "List automations for your org",
+  description:
+    "List automations for your org. Automations run on a dedicated subaccount with a " +
+    "Splits-managed server-wallet signer; each run is validated against the stored " +
+    "policy (chain, token, destination, amount) by the backend before signing — " +
+    "backend-enforced policy, not onchain enforcement.",
   env: authEnv,
   async run({ env }) {
     return apiRequest(env, "/automations");
