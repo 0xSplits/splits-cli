@@ -307,9 +307,7 @@ auth.command("create-key", {
     "By default creates the key only; pass --register to also register the address with the " +
     "backend in one call (equivalent to `create-key` + `register-signer <address>`). On " +
     "registration failure the local key is removed so the next attempt starts fresh. " +
-    "Refuses if a key already exists — delete it first. " +
-    "A registered EOA counts toward threshold identically to a passkey; at threshold 1 " +
-    "it can act alone within its subaccount, including on signer-set changes.",
+    "Refuses if a key already exists — delete it first.",
   env: authEnv,
   options: z.object({
     name: z
@@ -474,8 +472,7 @@ auth.command("register-signer", {
     "returned id is what `splits accounts update-signers --add-eoa-signer-ids` " +
     "expects. The address is attributed to the user that owns the API key; " +
     "you cannot register an address on behalf of another user. " +
-    "A registered EOA counts toward threshold identically to a passkey; at threshold 1 " +
-    "it can act alone within its subaccount, including on signer-set changes.",
+    "A registered EOA counts toward threshold identically to a passkey.",
   env: authEnv,
   args: z.object({
     address: evmAddress.describe("EOA address to register (0x...)"),
@@ -547,9 +544,8 @@ const accounts = Cli.create("accounts", {
     "implementation upgrades are owner-only and unreachable by an owned account's " +
     "signers. Ownership is the recovery mechanism and cannot be altered by any " +
     "threshold of the owned account's signatures: a compromised signer key is bounded " +
-    "by its subaccount and is always evictable by the owner one level up (treasury " +
-    "signers for subaccounts, root for the treasury; the root itself is rotated only " +
-    "by its own signer threshold), with all addresses unchanged. Web-approval " +
+    "by its subaccount and is always evictable by the owner one level up, with all " +
+    "addresses unchanged. Web-approval " +
     "requirements described below are platform policy layered on top; the chain " +
     "enforces only threshold and ownership, and signing keys live with signers, " +
     "not with Splits.",
@@ -757,15 +753,14 @@ accounts.command("update-signers", {
     "Primary use case: adding an external (EOA) key so an agent or automation can operate on the account headlessly " +
     "— passkeys require a biometric 2nd factor that agents cannot provide. " +
     "The proposal is created immediately; it must be approved and signed on the web via the returned signUrl. " +
-    "(Web approval is platform policy: onchain, any threshold-meeting signature set can also change signers via " +
-    "a directly-submitted UserOp — assume a threshold-meeting EOA can do this and size thresholds accordingly.) " +
+    "(The web-approval step is platform policy, not onchain enforcement — size thresholds assuming any " +
+    "threshold-meeting signer set can change signers.) " +
     "Poll 'transactions get <id>' to watch status transition from CREATED to EXECUTED. " +
     "If this returns 409 SMART_ACCOUNT_STATE_CHANGE_IN_PROGRESS, call 'transactions list --account <address>' " +
     "to find the pending proposal; it must be signed (web) or cancelled before retrying. " +
     "Recovery / resetting signers stays web-only — no CLI or API route exists. " +
-    "(Onchain, recovery runs through the parent account's owner rights — contract-enforced and unreachable " +
-    "by subaccount signers; not applicable to the root account, which has no owner — its signers rotate " +
-    "only via its own threshold.) " +
+    "(Recovery is the owning account's contract-enforced right — see 'splits accounts'; the root account " +
+    "has no owner and cannot be recovered from above.) " +
     "Updates apply to every active network on the org automatically. " +
     "Use 'accounts signers <address>' to discover existing signer IDs (passkeys and EOAs), and " +
     "`auth signers` to list the EOA ids registered under the acting user. " +
