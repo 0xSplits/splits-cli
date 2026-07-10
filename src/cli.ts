@@ -551,7 +551,8 @@ const accounts = Cli.create("accounts", {
     "signers for subaccounts, root for the treasury; the root itself is rotated only " +
     "by its own signer threshold), with all addresses unchanged. Web-approval " +
     "requirements described below are platform policy layered on top; the chain " +
-    "enforces only threshold and ownership.",
+    "enforces only threshold and ownership, and signing keys live with signers, " +
+    "not with Splits.",
 });
 
 accounts.command("list", {
@@ -1447,10 +1448,7 @@ transactions.command("sign", {
     "Fetches the transaction's signingHash, produces a personal_sign signature locally, " +
     "and submits it via POST /public/v1/transactions/:id/sign. " +
     "By default auto-submits the UserOp when this signature meets threshold; " +
-    "pass --no-submit to record only. Retries once on a stale signer nonce. " +
-    "Signing is local; the API call only coordinates. If the Splits API is unavailable, " +
-    "the UserOp can be constructed and submitted directly to a public bundler with the same key " +
-    "using standard ERC-4337 tooling (the CLI does not automate this).",
+    "pass --no-submit to record only. Retries once on a stale signer nonce.",
   env: authEnv,
   args: z.object({
     id: transactionId.describe("Transaction ID to sign"),
