@@ -12,6 +12,7 @@
   "scripts": {
     "dev": "tsx src/cli.ts",
     "build": "tsc",
+    "test": "tsx --test src/config.test.ts",
     "prepublishOnly": "pnpm build",
     "release": "npm version patch && pnpm publish --access public"
   },

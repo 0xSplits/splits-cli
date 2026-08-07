@@ -8,13 +8,17 @@ import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 
 import {
   CONFIG_FILE_PATH,
+  createProfile,
   defaultKeyName,
+  getActiveProfile,
+  listProfiles,
   loadLocalKeyPublic,
   removeApiKey,
   removeKey,
   resolveApiKey,
   saveApiKey,
   saveKey,
+  selectProfile,
 } from "./config.js";
 import { httpRequest, SplitsApiError } from "./http.js";
 import { PERIODS, resolvePeriod, type Period } from "./periods.js";
@@ -170,6 +174,38 @@ const auth = Cli.create("auth", {
   description: "Authentication and identity",
 });
 
+const profiles = Cli.create("profiles", {
+  description: "Named local API credential and signing-key contexts",
+});
+
+profiles.command("create", {
+  description:
+    "Create and select an empty profile. Subsequent auth login/create-key/import-key commands store credentials and the local EOA in this profile.",
+  args: z.object({ name: z.string().describe("Stable profile name (letters, numbers, underscores, hyphens)") }),
+  async run({ args }) {
+    await createProfile(args.name);
+    return { created: true, profile: args.name, activeProfile: args.name };
+  },
+});
+
+profiles.command("select", {
+  description: "Persist the active profile. Set SPLITS_PROFILE to select a profile per process without changing this saved selection.",
+  args: z.object({ name: z.string().describe("Existing profile name") }),
+  async run({ args }) {
+    await selectProfile(args.name);
+    return { selected: true, profile: args.name };
+  },
+});
+
+profiles.command("list", {
+  description: "List named profiles without exposing credentials or private keys.",
+  async run() {
+    return { profiles: await listProfiles() };
+  },
+});
+
+auth.command(profiles);
+
 auth.command("whoami", {
   description:
     "Show current org, API key name, and scopes. " +
@@ -221,6 +257,7 @@ auth.command("whoami", {
       data: {
         ...response.data,
         apiKeySource: resolved.source,
+        activeProfile: await getActiveProfile(),
         ...(localKeyPayload ? { localKey: localKeyPayload } : {}),
       },
     };

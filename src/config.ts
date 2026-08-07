@@ -1,8 +1,6 @@
-// Local config + keystore for splits-cli. A single file at ~/.splits/config.json
-// (mode 0600) holds an optional saved API key, an optional API URL override,
-// and at most one local EOA signing key. The same file serves as both
-// "credentials store" and "identity store" — keep the shape minimal; expand
-// only when a customer actually needs more than one key / API key.
+// Local config + keystore for splits-cli. Legacy installs use the top-level
+// fields. Named profiles add independent copies of those fields while leaving
+// the legacy values intact, so an unconfigured install behaves exactly as v1.
 
 import { constants as fsConstants, promises as fs } from "node:fs";
 import { homedir } from "node:os";
@@ -20,7 +18,9 @@ export const DEFAULT_API_URL = "https://server.production.splits.org";
 const HEX_ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
 const HEX_PRIVATE_KEY_RE = /^0x[0-9a-f]{64}$/i;
 
-const ConfigSchema = z.object({
+const PROFILE_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
+
+const ContextSchema = z.object({
   apiKey: z
     .object({
       value: z.string().min(1),
@@ -37,7 +37,50 @@ const ConfigSchema = z.object({
     .optional(),
 });
 
+type Context = z.infer<typeof ContextSchema>;
+
+const ConfigSchema = ContextSchema.extend({
+  activeProfile: z.string().regex(PROFILE_NAME_RE).optional(),
+  profiles: z.record(z.string().regex(PROFILE_NAME_RE), ContextSchema).optional(),
+});
+
 type Config = z.infer<typeof ConfigSchema>;
+
+const selectedProfile = (): string | null => {
+  const value = process.env.SPLITS_PROFILE;
+  if (value === undefined || value.length === 0) return null;
+  if (!PROFILE_NAME_RE.test(value)) {
+    throw new Error(
+      "SPLITS_PROFILE must be 1-64 characters using letters, numbers, underscores, or hyphens.",
+    );
+  }
+  return value;
+};
+
+const activeContext = (config: Config): { name: string | null; context: Context } => {
+  const name = selectedProfile() ?? config.activeProfile ?? null;
+  if (!name) return { name: null, context: config };
+  const context = config.profiles?.[name];
+  if (!context) {
+    throw new Error(`Profile \"${name}\" does not exist. Create it with 'splits auth profiles create ${name}'.`);
+  }
+  return { name, context };
+};
+
+const writeContext = async (
+  current: Config,
+  update: (context: Context) => Context,
+): Promise<void> => {
+  const { name, context } = activeContext(current);
+  if (!name) {
+    await writeRaw({ ...current, ...update(context) });
+    return;
+  }
+  await writeRaw({
+    ...current,
+    profiles: { ...current.profiles, [name]: update(context) },
+  });
+};
 
 const readRaw = async (): Promise<Config> => {
   let raw: string;
@@ -138,11 +181,11 @@ export const saveApiKey = async (
   opts?: { apiUrl?: string },
 ): Promise<void> => {
   const current = await readRaw();
-  await writeRaw({
-    ...current,
+  await writeContext(current, (context) => ({
+    ...context,
     apiKey: { value, savedAt: new Date().toISOString() },
     ...(opts?.apiUrl !== undefined ? { apiUrl: opts.apiUrl } : {}),
-  });
+  }));
 };
 
 export const removeApiKey = async (): Promise<{
@@ -150,10 +193,15 @@ export const removeApiKey = async (): Promise<{
   hadApiUrl: boolean;
 }> => {
   const current = await readRaw();
-  const hadApiKey = current.apiKey !== undefined;
-  const hadApiUrl = current.apiUrl !== undefined;
+  const { context } = activeContext(current);
+  const hadApiKey = context.apiKey !== undefined;
+  const hadApiUrl = context.apiUrl !== undefined;
   if (!hadApiKey && !hadApiUrl) return { hadApiKey, hadApiUrl };
-  await writeRaw({ ...current, apiKey: undefined, apiUrl: undefined });
+  await writeContext(current, (active) => ({
+    ...active,
+    apiKey: undefined,
+    apiUrl: undefined,
+  }));
   return { hadApiKey, hadApiUrl };
 };
 
@@ -168,9 +216,9 @@ export const resolveApiKey = async (env: {
   if (env.SPLITS_API_KEY !== undefined && env.SPLITS_API_KEY.length > 0) {
     return { value: env.SPLITS_API_KEY, source: "env" };
   }
-  const config = await readRaw();
-  if (config.apiKey) {
-    return { value: config.apiKey.value, source: "keystore" };
+  const { context } = activeContext(await readRaw());
+  if (context.apiKey) {
+    return { value: context.apiKey.value, source: "keystore" };
   }
   return null;
 };
@@ -181,8 +229,8 @@ export const resolveApiUrl = async (env: {
   if (env.SPLITS_API_URL !== undefined && env.SPLITS_API_URL.length > 0) {
     return env.SPLITS_API_URL;
   }
-  const config = await readRaw();
-  return config.apiUrl ?? DEFAULT_API_URL;
+  const { context } = activeContext(await readRaw());
+  return context.apiUrl ?? DEFAULT_API_URL;
 };
 
 // ----- Local EOA key -----
@@ -203,39 +251,74 @@ export const saveKey = async (
   opts?: { overwrite?: boolean },
 ): Promise<void> => {
   const current = await readRaw();
-  if (current.key && !opts?.overwrite) {
+  const { context } = activeContext(current);
+  if (context.key && !opts?.overwrite) {
     throw new Error(
-      `A local key already exists (${current.key.address}, "${current.key.name}"). ` +
+      `A local key already exists (${context.key.address}, "${context.key.name}"). ` +
         `Run 'splits auth delete-key' first if you want to replace it.`,
     );
   }
-  await writeRaw({ ...current, key });
+  await writeContext(current, (active) => ({ ...active, key }));
 };
 
 export const removeKey = async (): Promise<{
   previousAddress: `0x${string}` | null;
 }> => {
   const current = await readRaw();
+  const { context } = activeContext(current);
   const previousAddress =
-    (current.key?.address as `0x${string}` | undefined) ?? null;
-  if (!current.key) return { previousAddress };
-  await writeRaw({ ...current, key: undefined });
+    (context.key?.address as `0x${string}` | undefined) ?? null;
+  if (!context.key) return { previousAddress };
+  await writeContext(current, (active) => ({ ...active, key: undefined }));
   return { previousAddress };
 };
 
 export const loadLocalKeyPublic = async (): Promise<PublicKeyInfo | null> => {
-  const config = await readRaw();
-  if (!config.key) return null;
+  const { context } = activeContext(await readRaw());
+  if (!context.key) return null;
   return {
-    name: config.key.name,
-    address: config.key.address as `0x${string}`,
+    name: context.key.name,
+    address: context.key.address as `0x${string}`,
   };
 };
 
 export const loadLocalPrivateKey = async (): Promise<`0x${string}` | null> => {
+  const { context } = activeContext(await readRaw());
+  if (!context.key) return null;
+  return context.key.privateKey as `0x${string}`;
+};
+
+export type ProfileInfo = { name: string; active: boolean; source: "env" | "saved" | "legacy" };
+
+export const getActiveProfile = async (): Promise<ProfileInfo> => {
   const config = await readRaw();
-  if (!config.key) return null;
-  return config.key.privateKey as `0x${string}`;
+  const envProfile = selectedProfile();
+  const { name } = activeContext(config);
+  return { name: name ?? "legacy", active: true, source: envProfile ? "env" : config.activeProfile ? "saved" : "legacy" };
+};
+
+export const listProfiles = async (): Promise<ProfileInfo[]> => {
+  const config = await readRaw();
+  const current = await getActiveProfile();
+  return Object.keys(config.profiles ?? {}).sort().map((name) => ({
+    name,
+    active: current.name === name,
+    source: current.name === name ? current.source : "saved",
+  }));
+};
+
+export const createProfile = async (name: string): Promise<void> => {
+  if (!PROFILE_NAME_RE.test(name)) throw new Error("Profile names must be 1-64 characters using letters, numbers, underscores, or hyphens.");
+  const current = await readRaw();
+  if (current.profiles?.[name]) throw new Error(`Profile \"${name}\" already exists.`);
+  await writeRaw({ ...current, profiles: { ...current.profiles, [name]: {} }, activeProfile: name });
+};
+
+export const selectProfile = async (name: string): Promise<void> => {
+  if (!PROFILE_NAME_RE.test(name)) throw new Error("Profile names must be 1-64 characters using letters, numbers, underscores, or hyphens.");
+  const current = await readRaw();
+  if (!current.profiles?.[name]) throw new Error(`Profile \"${name}\" does not exist.`);
+  await writeRaw({ ...current, activeProfile: name });
 };
 
 // Default name used by create-key / import-key when --name is omitted.

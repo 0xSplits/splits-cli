@@ -41,12 +41,34 @@ splits auth logout
 
 Precedence is `SPLITS_API_KEY` env var → saved local config → error. `splits auth whoami` reports `apiKeySource` so you can tell where credentials came from. The same file (`~/.splits/config.json`, mode 0600, auto-gitignored) can also hold a local signing key — see below.
 
+### Named profiles
+
+Existing installs continue to use the original top-level config automatically. To keep separate API credentials, API URLs, and local EOAs together, create named profiles:
+
+```sh
+# Create and select the first context, then save its credential/key
+splits auth profiles create acme
+echo "$ACME_API_KEY" | splits auth login
+splits auth create-key --register
+
+# Create a second isolated context
+splits auth profiles create umbrella
+echo "$UMBRELLA_API_KEY" | splits auth login
+echo "$UMBRELLA_PRIVATE_KEY" | splits auth import-key
+
+# Switch the persisted interactive context
+splits auth profiles select acme
+splits auth profiles list
+```
+
+For MCP or any non-interactive process, select the profile without mutating the saved selection: `SPLITS_PROFILE=umbrella npx @splits/splits-cli --mcp`. `SPLITS_API_KEY` and `SPLITS_API_URL` still take precedence over the selected profile's saved API credential and URL. Profiles do not infer a signer from the authenticated organization; import the same EOA into multiple profiles when that is intentional.
+
 ## Local signing key
 
 The CLI can generate or import an EOA (Ethereum Externally Owned Account) and use it to sign pending multisig transactions locally, instead of opening the web app for the "Sign URL" flow. Useful for agents, automations, and MCP-driven workflows.
 
 ```sh
-# Generate a new EOA and save it locally (single key in v1)
+# Generate a new EOA in the active context
 splits auth create-key
 
 # Import an existing private key (stdin preferred; flag refused under MCP mode)
