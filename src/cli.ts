@@ -899,8 +899,10 @@ type ReportJobResponse = {
   data: { csvDownloadUrl: string | null; failed: boolean };
 };
 
+// Not unref'd: while a report is generating this timer is the only thing
+// keeping the process alive.
 const sleep = (ms: number) =>
-  new Promise((resolve) => setTimeout(resolve, ms).unref());
+  new Promise((resolve) => setTimeout(resolve, ms));
 
 // A report big enough to outrun the request comes back as a job id instead of
 // a URL, so every caller that wants a file has to poll for one.
