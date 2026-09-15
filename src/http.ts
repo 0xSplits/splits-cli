@@ -2,7 +2,9 @@
 // unauthenticated request paths so error parsing, timeouts, and the
 // SplitsApiError shape stay in one place.
 
+import { writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
+import { resolve } from "node:path";
 
 import { resolveApiKey, resolveApiUrl } from "./config.js";
 
@@ -105,4 +107,52 @@ export async function httpRequest<T = unknown>(
     );
   }
   return res.json() as Promise<T>;
+}
+
+// Generated reports are uploaded to the asset host and handed back as a plain
+// URL, so the download is an unauthenticated GET. Kept separate from
+// httpRequest because the body is a file, not JSON.
+const DOWNLOAD_TIMEOUT_MS = 120_000;
+
+export async function downloadToFile(
+  url: string,
+  destination: string,
+): Promise<{ path: string; bytes: number }> {
+  if (!url.startsWith("https://")) {
+    throw new SplitsApiError(
+      "invalid-download-url",
+      0,
+      `Refusing to download a report over a non-https URL: ${url}`,
+    );
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      headers: { "User-Agent": USER_AGENT },
+      signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+    });
+  } catch (err) {
+    if (err instanceof Error && err.name === "TimeoutError") {
+      throw new SplitsApiError(
+        "network-timeout",
+        0,
+        `Report download timed out after ${DOWNLOAD_TIMEOUT_MS / 1000}s.`,
+      );
+    }
+    throw err;
+  }
+
+  if (!res.ok) {
+    throw new SplitsApiError(
+      "report-download-failed",
+      res.status,
+      `Report download failed: ${res.status}`,
+    );
+  }
+
+  const buffer = Buffer.from(await res.arrayBuffer());
+  await writeFile(destination, buffer);
+
+  return { path: resolve(destination), bytes: buffer.byteLength };
 }

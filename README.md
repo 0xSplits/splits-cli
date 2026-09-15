@@ -191,6 +191,60 @@ splits accounts create --name "Ops"  --eoaSignerIds <eoa-id1>,<eoa-id2>     --th
 splits accounts create --name "Bots" --eoaAddresses 0xabc...,0xdef...        --threshold 1
 ```
 
+### Accounting
+
+```sh
+# Generate a report and get a download URL back
+splits accounting reports generate realized-gains --period lastYear
+
+# Or write it straight to disk (waits for large reports to finish generating)
+splits accounting reports generate realized-gains --period lastYear --file-format pdf --out ./rgl.pdf
+splits accounting reports generate statement --period lastMonth --out ./reports/
+
+# List reports generated for the org, and poll one that was queued
+splits accounting reports list
+splits accounting reports job <jobId>
+```
+
+Reports: `transactions`, `lots`, `lot-timeline`, `realized-gains`, `tokens`, `statement`. The statement is always a PDF. Filters (`--account-ids`, `--chain-ids`, `--tokens`, `--start-date` / `--end-date` or `--period`) match the app's; `--account-ids` takes account ids from `splits accounts list`, not addresses.
+
+```sh
+# Read tax lots, and the assertion history behind one
+splits accounting lots list --page-size 50 --status open
+splits accounting lots list --account-ids <id> --chain-ids 8453 --sort-by costBasis --sort-direction desc
+splits accounting lots assertions <lotId>
+```
+
+```sh
+# Seed opening inventory the org held before Splits (quantity is in base units)
+splits accounting assertions seed --account-id <id> --chain-id 8453 --token 0xabc... \
+  --unit-price 1500.50 --acquired-at 2024-03-01 --quantity 1000000
+
+# Correct a lot the engine derived, naming it by the transfer it opened from
+splits accounting assertions edit --account-id <id> --chain-id 8453 --token 0xabc... \
+  --source-transfer-id <transferId> --unit-price 1600
+
+# Mark an inbound as drawing from seeded inventory, so it carries basis
+splits accounting assertions designate --account-id <id> --chain-id 8453 --token 0xabc... \
+  --transfer-id <transferId>
+
+# Withdraw an assertion (names exactly one of the three targets)
+splits accounting assertions revoke --account-id <id> --chain-id 8453 --token 0xabc... --target-key <key>
+
+# Write up to 250 at once, as one atomic insert
+splits accounting assertions bulk --file ./seeds.json
+```
+
+```sh
+# Import an address the org held before Splits and poll its backfill
+splits accounting imports create --name "Old treasury" --address 0xabc... \
+  --chain-ids 8453,1 --cutoff-at 2026-01-15
+splits accounting imports list
+splits accounting imports status <accountId> --chain-ids 8453,1
+```
+
+Writing assertions and creating imports need a write-scoped, user-bound API key. Generating a report also needs a user-bound key, since the report records who asked for it.
+
 ### Members
 
 ```sh
@@ -232,6 +286,11 @@ The MCP server exposes these tools:
 - `auth_register_signer` / `auth_signers` — Register and list EOA signers under the acting user
 - `members_list` — List org members
 - `members_signers` — List passkey signers for a member
+- `accounting_reports_generate` — Generate an accounting report and return a URL or write it to disk
+- `accounting_reports_list` / `accounting_reports_job` — List generated reports, poll a queued one
+- `accounting_lots_list` / `accounting_lots_assertions` — Read tax lots and a lot's assertion history
+- `accounting_assertions_seed` / `_edit` / `_revoke` / `_designate` / `_bulk` — Write lot assertions
+- `accounting_imports_create` / `_list` / `_status` — Import an external address and poll its backfill
 
 ## Configuration
 

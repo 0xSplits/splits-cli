@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -16,7 +16,7 @@ import {
   saveApiKey,
   saveKey,
 } from "./config.js";
-import { httpRequest, SplitsApiError } from "./http.js";
+import { downloadToFile, httpRequest, SplitsApiError } from "./http.js";
 import { PERIODS, resolvePeriod, type Period } from "./periods.js";
 import { bytes32Hash, evmAddress, transactionId } from "./schemas.js";
 import { signTransactionLocally } from "./signing.js";
@@ -161,6 +161,38 @@ function buildQuery(
   const query = searchParams.toString();
   return query ? `?${query}` : "";
 }
+
+// Day-only YYYY-MM-DD inputs are interpreted as local midnight; anything else
+// passes through for the API to validate as ISO 8601.
+const normalizeDateInput = (value: string | undefined) => {
+  if (!value) return undefined;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const [y, m, d] = value.split("-").map(Number);
+    return new Date(y, m - 1, d).toISOString();
+  }
+  return value;
+};
+
+// --period is shorthand for a start/end pair, so it cannot be combined with
+// explicit bounds.
+const resolveDateRange = (options: {
+  startDate?: string;
+  endDate?: string;
+  period?: string;
+}): { startDate?: string; endDate?: string } => {
+  if (options.period && (options.startDate || options.endDate)) {
+    throw new Error(
+      `Cannot use --period together with --startDate or --endDate. Use one or the other. Valid --period values: ${PERIODS.join(", ")}.`,
+    );
+  }
+
+  if (options.period) return resolvePeriod(options.period as Period);
+
+  return {
+    startDate: normalizeDateInput(options.startDate),
+    endDate: normalizeDateInput(options.endDate),
+  };
+};
 
 // =============================================================================
 // auth
@@ -834,6 +866,630 @@ accounts.command("update-signers", {
 cli.command(accounts);
 
 // =============================================================================
+// accounting
+// =============================================================================
+
+const accounting = Cli.create("accounting", {
+  description: "Tax lots, lot assertions, accounting reports, and imports",
+});
+
+const REPORT_NAMES = [
+  "transactions",
+  "lots",
+  "lot-timeline",
+  "realized-gains",
+  "tokens",
+  "statement",
+] as const;
+
+const REPORT_POLL_INTERVAL_MS = 2_000;
+
+type GenerateReportResponse = {
+  data: {
+    reportId: string;
+    fileName: string;
+    userFriendlyFileName: string;
+    isLongRunningOperation: boolean;
+    csvDownloadUrl: string | null;
+    jobId: string | null;
+  };
+};
+
+type ReportJobResponse = {
+  data: { csvDownloadUrl: string | null; failed: boolean };
+};
+
+const sleep = (ms: number) =>
+  new Promise((resolve) => setTimeout(resolve, ms).unref());
+
+// A report big enough to outrun the request comes back as a job id instead of
+// a URL, so every caller that wants a file has to poll for one.
+const waitForReportUrl = async (
+  env: AuthEnv,
+  jobId: string,
+  timeoutSeconds: number,
+): Promise<string> => {
+  const deadline = Date.now() + timeoutSeconds * 1000;
+
+  while (Date.now() < deadline) {
+    await sleep(REPORT_POLL_INTERVAL_MS);
+    const { data } = await apiRequest<ReportJobResponse>(
+      env,
+      `/accounting/reports/jobs/${jobId}`,
+    );
+    if (data.failed) {
+      throw new Error(
+        `Report generation failed (job ${jobId}). Report jobs do not retry; run the command again.`,
+      );
+    }
+    if (data.csvDownloadUrl) return data.csvDownloadUrl;
+  }
+
+  throw new Error(
+    `Report is still generating after ${timeoutSeconds}s. Poll it with \`splits accounting reports job ${jobId}\`, or retry with a longer --timeout.`,
+  );
+};
+
+// --out takes either a file path or a directory to drop the report into.
+const resolveReportPath = (out: string, fileName: string, extension: string) => {
+  const isDirectory =
+    out.endsWith("/") ||
+    (existsSync(out) && statSync(out).isDirectory());
+  return isDirectory ? join(out, `${fileName}.${extension}`) : out;
+};
+
+const reports = Cli.create("reports", {
+  description: "Generate and download accounting reports",
+});
+
+reports.command("list", {
+  description:
+    "List the 50 most recent reports generated for your org, newest first. " +
+    "A ready report carries a downloadUrl you can fetch directly.",
+  env: authEnv,
+  async run({ env }) {
+    return apiRequest(env, "/accounting/reports");
+  },
+});
+
+reports.command("generate", {
+  description:
+    "Generate a report and return its download URL, or write it to disk with --out. " +
+    "Waits for reports large enough to be queued, up to --timeout. " +
+    "Reports: transactions (all activity), lots (open inventory as of a date), " +
+    "lot-timeline (per-lot open and close events), realized-gains (RGL), " +
+    "tokens (per-token balances), statement (transactions + tokens + gains, always PDF). " +
+    "Examples: { report: 'realized-gains', period: 'lastYear', fileFormat: 'pdf', out: './rgl.pdf' }; " +
+    "{ report: 'lots', openAsOf: '2026-12-31' }",
+  env: authEnv,
+  args: z.object({
+    report: z.enum(REPORT_NAMES).describe("Which report to generate"),
+  }),
+  options: z.object({
+    fileFormat: z
+      .enum(["csv", "pdf"])
+      .default("csv")
+      .describe(
+        "File format to generate. The statement is always a PDF regardless of this flag.",
+      ),
+    out: z
+      .string()
+      .optional()
+      .describe(
+        "Write the report to this path instead of returning a URL. A directory (or a path ending in '/') writes under the report's generated filename.",
+      ),
+    timeout: z
+      .number()
+      .min(10)
+      .max(1800)
+      .default(300)
+      .describe(
+        "Seconds to wait for a queued report before giving up and returning its job id.",
+      ),
+    accountIds: z
+      .string()
+      .optional()
+      .describe(
+        "Comma-separated account ids to limit the report to (ids come from 'accounts list', not addresses). Omit for every account.",
+      ),
+    chainIds: z
+      .string()
+      .optional()
+      .describe("Comma-separated chain ids (e.g. '8453,1'). Omit for all chains."),
+    tokens: z
+      .string()
+      .optional()
+      .describe("Comma-separated token addresses to limit the report to"),
+    search: z
+      .string()
+      .optional()
+      .describe("Substring search, applied to memos or token symbols depending on the report"),
+    openAsOf: z
+      .string()
+      .optional()
+      .describe(
+        "For the lots report: the instant to read open inventory at. ISO 8601. Defaults to now.",
+      ),
+    startDate: z
+      .string()
+      .optional()
+      .describe("Inclusive lower bound on the reporting period. ISO 8601."),
+    endDate: z
+      .string()
+      .optional()
+      .describe("EXCLUSIVE upper bound on the reporting period. ISO 8601."),
+    period: z
+      .enum(PERIODS)
+      .optional()
+      .describe(
+        "Date range shorthand resolved in your local timezone. Mutually exclusive with --startDate / --endDate.",
+      ),
+  }),
+  async run({ env, args, options }) {
+    const { startDate, endDate } = resolveDateRange(options);
+    const fileFormat =
+      args.report === "statement" ? "pdf" : options.fileFormat;
+
+    const { data } = await apiRequest<GenerateReportResponse>(
+      env,
+      `/accounting/reports/${args.report}${buildQuery({
+        format: fileFormat,
+        accountIds: options.accountIds,
+        chainIds: options.chainIds,
+        tokens: options.tokens,
+        search: options.search,
+        openAsOf: normalizeDateInput(options.openAsOf),
+        startDate,
+        endDate,
+      })}`,
+    );
+
+    const downloadUrl =
+      data.csvDownloadUrl ??
+      (data.jobId
+        ? await waitForReportUrl(env, data.jobId, options.timeout)
+        : null);
+
+    if (!downloadUrl) {
+      throw new Error(
+        `Report ${data.reportId} finished without a download URL. Check 'accounting reports list' for its status.`,
+      );
+    }
+
+    if (!options.out) {
+      return {
+        report: args.report,
+        reportId: data.reportId,
+        fileFormat,
+        fileName: data.userFriendlyFileName,
+        queued: data.isLongRunningOperation,
+        downloadUrl,
+      };
+    }
+
+    const { path, bytes } = await downloadToFile(
+      downloadUrl,
+      resolveReportPath(options.out, data.userFriendlyFileName, fileFormat),
+    );
+
+    return {
+      report: args.report,
+      reportId: data.reportId,
+      fileFormat,
+      queued: data.isLongRunningOperation,
+      path,
+      bytes,
+    };
+  },
+});
+
+reports.command("job", {
+  description:
+    "Check a queued report. Returns its download URL once the file is written. " +
+    "Report jobs do not retry, so failed is final.",
+  env: authEnv,
+  args: z.object({
+    jobId: z.string().describe("Job id returned by 'accounting reports generate'"),
+  }),
+  async run({ env, args }) {
+    return apiRequest(env, `/accounting/reports/jobs/${args.jobId}`);
+  },
+});
+
+accounting.command(reports);
+
+const lots = Cli.create("lots", {
+  description: "Read tax lots and their assertion history",
+});
+
+lots.command("list", {
+  description:
+    "List tax lots, one page at a time. Use this to find the lot id, target key, " +
+    "anchor transfer, or transfer id an assertion needs to name.",
+  env: authEnv,
+  options: z.object({
+    pageIndex: z.number().min(0).default(0).describe("Zero-based page index"),
+    pageSize: z.number().min(1).max(50).default(50).describe("Rows per page, max 50"),
+    accountIds: z
+      .string()
+      .optional()
+      .describe("Comma-separated account ids (from 'accounts list')"),
+    chainIds: z.string().optional().describe("Comma-separated chain ids"),
+    tokens: z.string().optional().describe("Comma-separated token addresses"),
+    status: z
+      .enum(["open", "closed", "all"])
+      .optional()
+      .describe("Which lots to include. Defaults to open."),
+    openAsOf: z
+      .string()
+      .optional()
+      .describe("Read open inventory as of this instant. ISO 8601. Defaults to now."),
+    search: z.string().optional().describe("Substring search across token symbol and name"),
+    acquiredAfter: z
+      .string()
+      .optional()
+      .describe("Only lots acquired at or after this instant. ISO 8601."),
+    minRemaining: z
+      .string()
+      .optional()
+      .describe("Inclusive lower bound on remaining quantity, in whole tokens"),
+    maxRemaining: z
+      .string()
+      .optional()
+      .describe("Inclusive upper bound on remaining quantity, in whole tokens"),
+    minCostBasis: z
+      .string()
+      .optional()
+      .describe("Inclusive lower bound on cost basis, in USD"),
+    maxCostBasis: z
+      .string()
+      .optional()
+      .describe("Inclusive upper bound on cost basis, in USD"),
+    sortBy: z
+      .enum(["acquisitionTime", "costBasis"])
+      .optional()
+      .describe("Sort column"),
+    sortDirection: z.enum(["asc", "desc"]).optional().describe("Sort direction"),
+  }),
+  async run({ env, options }) {
+    return apiRequest(
+      env,
+      `/accounting/lots${buildQuery({
+        pageIndex: options.pageIndex,
+        pageSize: options.pageSize,
+        accountIds: options.accountIds,
+        chainIds: options.chainIds,
+        tokens: options.tokens,
+        status: options.status,
+        openAsOf: normalizeDateInput(options.openAsOf),
+        search: options.search,
+        startDate: normalizeDateInput(options.acquiredAfter),
+        minRemaining: options.minRemaining,
+        maxRemaining: options.maxRemaining,
+        minCostBasis: options.minCostBasis,
+        maxCostBasis: options.maxCostBasis,
+        sortBy: options.sortBy,
+        sortDirection: options.sortDirection,
+      })}`,
+    );
+  },
+});
+
+lots.command("assertions", {
+  description:
+    "List every assertion written against a lot, oldest first, with the value each one replaced. " +
+    "An unknown lot reads as empty.",
+  env: authEnv,
+  args: z.object({
+    lotId: z.string().describe("Lot id from 'accounting lots list'"),
+  }),
+  async run({ env, args }) {
+    return apiRequest(env, `/accounting/lots/${args.lotId}/assertions`);
+  },
+});
+
+accounting.command(lots);
+
+const assertions = Cli.create("assertions", {
+  description: "Seed, edit, revoke, and designate tax lots",
+});
+
+type LotAssertion = Record<string, unknown>;
+
+const writeAssertion = (env: AuthEnv, assertion: LotAssertion) =>
+  apiRequest(env, "/accounting/lot-assertions", {
+    method: "PUT",
+    body: { assertion },
+  });
+
+// Every assertion names the account, chain, and token it applies to.
+const assertionTarget = {
+  accountId: z
+    .string()
+    .describe("Account id the lot belongs to (from 'accounts list')"),
+  chainId: z.number().int().positive().describe("Chain id"),
+  token: evmAddress.describe("Token contract address (0x...)"),
+};
+
+assertions.command("seed", {
+  description:
+    "Seed opening inventory: a lot that predates Splits custody. " +
+    "Requires unit price, acquisition time, and quantity together, since a seed materializes the whole lot. " +
+    "Quantity is in base units (wei for ETH, 6-decimal units for USDC).",
+  env: authEnv,
+  options: z.object({
+    ...assertionTarget,
+    unitPrice: z
+      .string()
+      .regex(AMOUNT_REGEX, "Must be a non-negative decimal (e.g. '1500.50')")
+      .describe("Cost basis per whole token, in USD"),
+    acquiredAt: z
+      .string()
+      .describe("When the lot was acquired. ISO 8601, must be in the past."),
+    quantity: z
+      .string()
+      .regex(/^\d+$/, "Must be an integer amount in base units")
+      .describe("Lot size in base units"),
+    targetKey: z
+      .string()
+      .optional()
+      .describe(
+        "Target key of an existing seeded lot to correct. Omit to mint a new lot.",
+      ),
+  }),
+  async run({ env, options }) {
+    return writeAssertion(env, {
+      kind: "seed",
+      smartAccountId: options.accountId,
+      chainId: options.chainId,
+      tokenAddress: options.token,
+      unitPrice: options.unitPrice,
+      acquisitionTime: normalizeDateInput(options.acquiredAt),
+      quantity: options.quantity,
+      targetKey: options.targetKey,
+    });
+  },
+});
+
+assertions.command("edit", {
+  description:
+    "Correct a lot the engine derived, naming it by the transfer it opened from. " +
+    "Asserts at least one of unit price, acquisition time, or origin lot. " +
+    "Quantity is never editable: the account's real balance is ground truth.",
+  env: authEnv,
+  options: z.object({
+    ...assertionTarget,
+    sourceTransferId: z
+      .string()
+      .describe("Transfer the lot opened from ('sourceTransferId' on the lot)"),
+    anchorOriginLotId: z
+      .string()
+      .optional()
+      .describe(
+        "Origin lot currently on the lot being edited ('originLotId'). Part of the lot's identity, not a new value.",
+      ),
+    unitPrice: z
+      .string()
+      .regex(AMOUNT_REGEX, "Must be a non-negative decimal (e.g. '1500.50')")
+      .optional()
+      .describe("Corrected cost basis per whole token, in USD"),
+    acquiredAt: z
+      .string()
+      .optional()
+      .describe("Corrected acquisition time. ISO 8601, must be in the past."),
+    originLotId: z
+      .string()
+      .optional()
+      .describe("Corrected lot this one carries basis from"),
+  }),
+  async run({ env, options }) {
+    if (!options.unitPrice && !options.acquiredAt && !options.originLotId) {
+      throw new Error(
+        "An edit must assert at least one of --unit-price, --acquired-at, or --origin-lot-id.",
+      );
+    }
+
+    return writeAssertion(env, {
+      kind: "edit",
+      smartAccountId: options.accountId,
+      chainId: options.chainId,
+      tokenAddress: options.token,
+      anchor: {
+        sourceTransferId: options.sourceTransferId,
+        originLotId: options.anchorOriginLotId ?? null,
+      },
+      unitPrice: options.unitPrice,
+      acquisitionTime: normalizeDateInput(options.acquiredAt),
+      originLotId: options.originLotId,
+    });
+  },
+});
+
+assertions.command("revoke", {
+  description:
+    "Withdraw an earlier assertion, returning the lot to what the engine derived. " +
+    "Names exactly one of --target-key (a seed), --source-transfer-id (an edit), or --transfer-id (a designation).",
+  env: authEnv,
+  options: z.object({
+    ...assertionTarget,
+    targetKey: z.string().optional().describe("Target key of a seeded lot"),
+    sourceTransferId: z
+      .string()
+      .optional()
+      .describe("Transfer an edited lot opened from"),
+    anchorOriginLotId: z
+      .string()
+      .optional()
+      .describe("Origin lot on the edited lot, when it has one"),
+    transferId: z
+      .string()
+      .optional()
+      .describe("Inbound transfer a designation marked"),
+  }),
+  async run({ env, options }) {
+    const named = [
+      options.targetKey,
+      options.sourceTransferId,
+      options.transferId,
+    ].filter((value) => value !== undefined);
+
+    if (named.length !== 1) {
+      throw new Error(
+        "A revoke names exactly one of --target-key, --source-transfer-id, or --transfer-id.",
+      );
+    }
+
+    return writeAssertion(env, {
+      kind: "revoke",
+      smartAccountId: options.accountId,
+      chainId: options.chainId,
+      tokenAddress: options.token,
+      targetKey: options.targetKey,
+      anchor: options.sourceTransferId
+        ? {
+            sourceTransferId: options.sourceTransferId,
+            originLotId: options.anchorOriginLotId ?? null,
+          }
+        : undefined,
+      transferId: options.transferId,
+    });
+  },
+});
+
+assertions.command("designate", {
+  description:
+    "Mark an inbound transfer as drawing from seeded inventory, so it carries basis " +
+    "from the seed instead of opening a fresh lot at the transfer's price.",
+  env: authEnv,
+  options: z.object({
+    ...assertionTarget,
+    transferId: z
+      .string()
+      .describe("Inbound transfer to designate"),
+  }),
+  async run({ env, options }) {
+    return writeAssertion(env, {
+      kind: "designate",
+      smartAccountId: options.accountId,
+      chainId: options.chainId,
+      tokenAddress: options.token,
+      transferId: options.transferId,
+    });
+  },
+});
+
+assertions.command("bulk", {
+  description:
+    "Write up to 250 assertions from a JSON file, as one atomic insert: a rejected row leaves nothing behind. " +
+    "The file holds an array of assertion objects, each shaped like the body the single-assertion commands send " +
+    "({ kind, smartAccountId, chainId, tokenAddress, ... }).",
+  env: authEnv,
+  options: z.object({
+    file: z
+      .string()
+      .describe("Path to a JSON file holding an array of assertions"),
+  }),
+  async run({ env, options }) {
+    const parsed: unknown = JSON.parse(readFileSync(options.file, "utf8"));
+
+    if (!Array.isArray(parsed)) {
+      throw new Error(
+        `${options.file} must hold a JSON array of assertion objects.`,
+      );
+    }
+
+    return apiRequest(env, "/accounting/lot-assertions/bulk", {
+      method: "PUT",
+      body: { assertions: parsed },
+    });
+  },
+});
+
+accounting.command(assertions);
+
+const imports = Cli.create("imports", {
+  description: "Import external addresses into accounting",
+});
+
+imports.command("create", {
+  description:
+    "Import an address the org held before Splits, so its history feeds lot accounting. " +
+    "Queues a per-chain backfill; poll it with 'accounting imports status'. " +
+    "Replaying the same import returns the existing account rather than creating a second one.",
+  env: authEnv,
+  options: z.object({
+    name: z.string().min(1).describe("Name for the imported account"),
+    address: evmAddress.describe("Address to import (0x...)"),
+    chainIds: z
+      .string()
+      .describe("Comma-separated chain ids to import history from (e.g. '8453,1')"),
+    cutoffAt: z
+      .string()
+      .optional()
+      .describe(
+        "Ignore activity after this instant, e.g. the date the treasury migrated to Splits. ISO 8601. Omit to import everything.",
+      ),
+  }),
+  async run({ env, options }) {
+    const chainIds = splitCsv(options.chainIds).map((id) => {
+      const parsed = Number(id);
+      if (!Number.isInteger(parsed) || parsed <= 0) {
+        throw new Error(`Invalid chain id: ${id}`);
+      }
+      return parsed;
+    });
+
+    if (chainIds.length === 0) {
+      throw new Error("--chain-ids must name at least one chain.");
+    }
+
+    return apiRequest(env, "/accounting/imports", {
+      method: "PUT",
+      body: {
+        name: options.name,
+        address: options.address,
+        chainIds,
+        cutoffAt: normalizeDateInput(options.cutoffAt),
+      },
+    });
+  },
+});
+
+imports.command("list", {
+  description: "List imported accounts and their cutoff dates",
+  env: authEnv,
+  async run({ env }) {
+    return apiRequest(env, "/accounting/imports");
+  },
+});
+
+imports.command("status", {
+  description:
+    "Check the per-chain backfill for an import. Name the same chains the import was created with.",
+  env: authEnv,
+  args: z.object({
+    accountId: z.string().describe("Imported account id from 'accounting imports create'"),
+  }),
+  options: z.object({
+    chainIds: z
+      .string()
+      .describe("Comma-separated chain ids the import was created with"),
+  }),
+  async run({ env, args, options }) {
+    return apiRequest(
+      env,
+      `/accounting/imports/${args.accountId}/jobs${buildQuery({
+        chainIds: options.chainIds,
+      })}`,
+    );
+  },
+});
+
+accounting.command(imports);
+
+cli.command(accounting);
+
+// =============================================================================
 // transactions
 // =============================================================================
 
@@ -928,33 +1584,7 @@ transactions.command("list", {
       ),
   }),
   async run({ env, options }) {
-    // Mutual exclusion: --period vs explicit dates
-    if (options.period && (options.startDate || options.endDate)) {
-      throw new Error(
-        `Cannot use --period together with --startDate or --endDate. Use one or the other. Valid --period values: ${PERIODS.join(", ")}.`,
-      );
-    }
-
-    // Day-only YYYY-MM-DD inputs are interpreted as local midnight.
-    const normalizeDateInput = (value: string | undefined) => {
-      if (!value) return undefined;
-      // Match plain YYYY-MM-DD (no time component)
-      if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-        const [y, m, d] = value.split("-").map(Number);
-        return new Date(y, m - 1, d).toISOString();
-      }
-      // Otherwise pass through; the API will validate as ISO 8601
-      return value;
-    };
-
-    let startDate = normalizeDateInput(options.startDate);
-    let endDate = normalizeDateInput(options.endDate);
-
-    if (options.period) {
-      const resolved = resolvePeriod(options.period as Period);
-      startDate = resolved.startDate;
-      endDate = resolved.endDate;
-    }
+    const { startDate, endDate } = resolveDateRange(options);
 
     return apiRequest(
       env,
