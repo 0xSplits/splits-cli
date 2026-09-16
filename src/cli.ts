@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -896,7 +897,14 @@ type GenerateReportResponse = {
 };
 
 type ReportJobResponse = {
-  data: { csvDownloadUrl: string | null; failed: boolean };
+  data: {
+    reportId: string;
+    status: string;
+    fileName: string;
+    csvDownloadUrl: string | null;
+    failed: boolean;
+    failureReason: string | null;
+  };
 };
 
 // Not unref'd: while a report is generating this timer is the only thing
@@ -921,7 +929,9 @@ const waitForReportUrl = async (
     );
     if (data.failed) {
       throw new Error(
-        `Report generation failed (job ${jobId}). Report jobs do not retry; run the command again.`,
+        `Report generation failed (job ${jobId})${
+          data.failureReason ? `: ${data.failureReason}` : ""
+        }. Report jobs do not retry; run the command again.`,
       );
     }
     if (data.csvDownloadUrl) return data.csvDownloadUrl;
@@ -1044,6 +1054,9 @@ reports.command("generate", {
         startDate,
         endDate,
       })}`,
+      // Generating writes a report row and can queue a job, so it is a PUT
+      // and needs a write-scoped key.
+      { method: "PUT" },
     );
 
     const downloadUrl =
@@ -1236,7 +1249,7 @@ assertions.command("seed", {
       .string()
       .optional()
       .describe(
-        "Target key of an existing seeded lot to correct. Omit to mint a new lot.",
+        "Target key of an existing seeded lot to correct. Omit for a new lot and one is minted here, so a retry of this command cannot double the lot.",
       ),
   }),
   async run({ env, options }) {
@@ -1248,7 +1261,9 @@ assertions.command("seed", {
       unitPrice: options.unitPrice,
       acquisitionTime: normalizeDateInput(options.acquiredAt),
       quantity: options.quantity,
-      targetKey: options.targetKey,
+      // Minted per invocation rather than per request: the API rejects a
+      // keyless seed precisely so a replay lands on the same lot.
+      targetKey: options.targetKey ?? randomUUID(),
     });
   },
 });
@@ -1384,7 +1399,8 @@ assertions.command("bulk", {
   description:
     "Write up to 250 assertions from a JSON file, as one atomic insert: a rejected row leaves nothing behind. " +
     "The file holds an array of assertion objects, each shaped like the body the single-assertion commands send " +
-    "({ kind, smartAccountId, chainId, tokenAddress, ... }).",
+    "({ kind, smartAccountId, chainId, tokenAddress, ... }). Every seed must carry a targetKey, so re-running the " +
+    "same file corrects those lots instead of creating a second set of them.",
   env: authEnv,
   options: z.object({
     file: z
