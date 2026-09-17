@@ -216,9 +216,10 @@ splits accounting lots assertions <lotId>
 ```
 
 ```sh
-# Seed opening inventory the org held before Splits (quantity is in base units)
+# Seed opening inventory the org held before Splits (quantity is in base units).
+# --target-key names the lot; rerun with the same key to correct it.
 splits accounting assertions seed --account-id <id> --chain-id 8453 --token 0xabc... \
-  --unit-price 1500.50 --acquired-at 2024-03-01 --quantity 1000000
+  --unit-price 1500.50 --acquired-at 2024-03-01 --quantity 1000000 --target-key usdc-opening-2024
 
 # Correct a lot the engine derived, naming it by the transfer it opened from
 splits accounting assertions edit --account-id <id> --chain-id 8453 --token 0xabc... \

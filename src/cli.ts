@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1247,9 +1246,10 @@ assertions.command("seed", {
       .describe("Lot size in base units"),
     targetKey: z
       .string()
-      .optional()
+      .min(1)
       .describe(
-        "Target key of an existing seeded lot to correct. Omit for a new lot and one is minted here, so a retry of this command cannot double the lot.",
+        "Caller-chosen key naming the seeded lot. Reuse it to correct that lot; pick a new one for a new lot. " +
+          "Rerunning with the same key updates the lot instead of creating a second one.",
       ),
   }),
   async run({ env, options }) {
@@ -1261,9 +1261,7 @@ assertions.command("seed", {
       unitPrice: options.unitPrice,
       acquisitionTime: normalizeDateInput(options.acquiredAt),
       quantity: options.quantity,
-      // Minted per invocation rather than per request: the API rejects a
-      // keyless seed precisely so a replay lands on the same lot.
-      targetKey: options.targetKey ?? randomUUID(),
+      targetKey: options.targetKey,
     });
   },
 });
