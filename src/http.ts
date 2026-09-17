@@ -2,9 +2,13 @@
 // unauthenticated request paths so error parsing, timeouts, and the
 // SplitsApiError shape stay in one place.
 
-import { writeFile } from "node:fs/promises";
+import { createWriteStream } from "node:fs";
+import { rename, rm, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import type { ReadableStream as WebReadableStream } from "node:stream/web";
 
 import { resolveApiKey, resolveApiUrl } from "./config.js";
 
@@ -143,7 +147,7 @@ export async function downloadToFile(
     throw err;
   }
 
-  if (!res.ok) {
+  if (!res.ok || !res.body) {
     throw new SplitsApiError(
       "report-download-failed",
       res.status,
@@ -151,8 +155,27 @@ export async function downloadToFile(
     );
   }
 
-  const buffer = Buffer.from(await res.arrayBuffer());
-  await writeFile(destination, buffer);
+  // Streamed so a large report never sits in memory, and written beside the
+  // destination first so a failed download leaves no truncated file behind.
+  const partial = `${destination}.partial`;
+  try {
+    await pipeline(
+      Readable.fromWeb(res.body as WebReadableStream),
+      createWriteStream(partial),
+    );
+    await rename(partial, destination);
+  } catch (err) {
+    await rm(partial, { force: true });
+    if (err instanceof Error && err.name === "TimeoutError") {
+      throw new SplitsApiError(
+        "network-timeout",
+        0,
+        `Report download timed out after ${DOWNLOAD_TIMEOUT_MS / 1000}s.`,
+      );
+    }
+    throw err;
+  }
 
-  return { path: resolve(destination), bytes: buffer.byteLength };
+  const { size } = await stat(destination);
+  return { path: resolve(destination), bytes: size };
 }

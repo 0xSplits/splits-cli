@@ -870,7 +870,7 @@ cli.command(accounts);
 // =============================================================================
 
 const accounting = Cli.create("accounting", {
-  description: "Tax lots, lot assertions, accounting reports, and imports",
+  description: "Tax lots, lot assertions, accounting reports, imports, and lot recomputes",
 });
 
 const REPORT_NAMES = [
@@ -941,12 +941,17 @@ const waitForReportUrl = async (
   );
 };
 
+const isDirectoryPath = (out: string) =>
+  out.endsWith("/") || (existsSync(out) && statSync(out).isDirectory());
+
 // --out takes either a file path or a directory to drop the report into.
-const resolveReportPath = (out: string, fileName: string, extension: string) => {
-  const isDirectory =
-    out.endsWith("/") ||
-    (existsSync(out) && statSync(out).isDirectory());
-  return isDirectory ? join(out, `${fileName}.${extension}`) : out;
+const resolveReportPath = (out: string, fileName: string, extension: string) =>
+  isDirectoryPath(out) ? join(out, `${fileName}.${extension}`) : out;
+
+const assertWritable = (path: string, force: boolean) => {
+  if (!force && existsSync(path)) {
+    throw new Error(`${path} already exists. Pass --force to overwrite it.`);
+  }
 };
 
 const reports = Cli.create("reports", {
@@ -970,6 +975,7 @@ reports.command("generate", {
     "Reports: transactions (all activity), lots (open inventory as of a date), " +
     "lot-timeline (per-lot open and close events), realized-gains (RGL), " +
     "tokens (per-token balances), statement (transactions + tokens + gains, always PDF). " +
+    "Each report ignores filters it does not support; each filter names the reports that read it. " +
     "Examples: { report: 'realized-gains', period: 'lastYear', fileFormat: 'pdf', out: './rgl.pdf' }; " +
     "{ report: 'lots', openAsOf: '2026-12-31' }",
   env: authEnv,
@@ -987,8 +993,12 @@ reports.command("generate", {
       .string()
       .optional()
       .describe(
-        "Write the report to this path instead of returning a URL. A directory (or a path ending in '/') writes under the report's generated filename.",
+        "Write the report to this path instead of returning a URL. A directory (or a path ending in '/') writes under the report's generated filename. Refuses to replace an existing file unless --force is set.",
       ),
+    force: z
+      .boolean()
+      .default(false)
+      .describe("Overwrite the --out file if it already exists"),
     timeout: z
       .number()
       .min(10)
@@ -1001,30 +1011,63 @@ reports.command("generate", {
       .string()
       .optional()
       .describe(
-        "Comma-separated account ids to limit the report to (ids come from 'accounts list', not addresses). Omit for every account.",
+        "Comma-separated account ids to limit the report to (ids come from 'accounts list', not addresses). Omit for every account. All reports.",
       ),
     chainIds: z
       .string()
       .optional()
-      .describe("Comma-separated chain ids (e.g. '8453,1'). Omit for all chains."),
+      .describe(
+        "Comma-separated chain ids (e.g. '8453,1'). Omit for all chains. All reports except realized-gains.",
+      ),
     tokens: z
       .string()
       .optional()
-      .describe("Comma-separated token addresses to limit the report to"),
+      .describe(
+        "Comma-separated chainId:address pairs (e.g. '8453:0x8335...'). transactions, lots, and lot-timeline only.",
+      ),
+    memo: z
+      .string()
+      .optional()
+      .describe("Substring search across memos. transactions only."),
+    transactionHash: bytes32Hash
+      .optional()
+      .describe("On-chain transaction hash. transactions only."),
+    minAmount: z
+      .string()
+      .regex(AMOUNT_REGEX, "Must be a non-negative decimal (e.g. '1500.50')")
+      .optional()
+      .describe("Inclusive lower bound on absolute USD value. transactions only."),
+    maxAmount: z
+      .string()
+      .regex(AMOUNT_REGEX, "Must be a non-negative decimal (e.g. '1500.50')")
+      .optional()
+      .describe("Inclusive upper bound on absolute USD value. transactions only."),
+    inbound: z
+      .boolean()
+      .default(false)
+      .describe(
+        "Include only inbound activity. Setting both --inbound and --outbound is the same as neither. transactions only.",
+      ),
+    outbound: z
+      .boolean()
+      .default(false)
+      .describe("Include only outbound activity. transactions only."),
     search: z
       .string()
       .optional()
-      .describe("Substring search, applied to memos or token symbols depending on the report"),
+      .describe("Substring search across token symbols and names. tokens only."),
     openAsOf: z
       .string()
       .optional()
       .describe(
-        "For the lots report: the instant to read open inventory at. ISO 8601. Defaults to now.",
+        "The instant to read open inventory at. ISO 8601. Defaults to now. lots only.",
       ),
     startDate: z
       .string()
       .optional()
-      .describe("Inclusive lower bound on the reporting period. ISO 8601."),
+      .describe(
+        "Inclusive lower bound on the reporting period. ISO 8601. All reports except lots.",
+      ),
     endDate: z
       .string()
       .optional()
@@ -1041,6 +1084,11 @@ reports.command("generate", {
     const fileFormat =
       args.report === "statement" ? "pdf" : options.fileFormat;
 
+    // Fail before generating when the destination is already known.
+    if (options.out && !isDirectoryPath(options.out)) {
+      assertWritable(options.out, options.force);
+    }
+
     const { data } = await apiRequest<GenerateReportResponse>(
       env,
       `/accounting/reports/${args.report}${buildQuery({
@@ -1048,6 +1096,12 @@ reports.command("generate", {
         accountIds: options.accountIds,
         chainIds: options.chainIds,
         tokens: options.tokens,
+        memo: options.memo,
+        transactionHash: options.transactionHash,
+        minAmount: options.minAmount,
+        maxAmount: options.maxAmount,
+        inbound: options.inbound,
+        outbound: options.outbound,
         search: options.search,
         openAsOf: normalizeDateInput(options.openAsOf),
         startDate,
@@ -1081,10 +1135,14 @@ reports.command("generate", {
       };
     }
 
-    const { path, bytes } = await downloadToFile(
-      downloadUrl,
-      resolveReportPath(options.out, data.userFriendlyFileName, fileFormat),
+    const destination = resolveReportPath(
+      options.out,
+      data.userFriendlyFileName,
+      fileFormat,
     );
+    assertWritable(destination, options.force);
+
+    const { path, bytes } = await downloadToFile(downloadUrl, destination);
 
     return {
       report: args.report,
@@ -1129,7 +1187,10 @@ lots.command("list", {
       .optional()
       .describe("Comma-separated account ids (from 'accounts list')"),
     chainIds: z.string().optional().describe("Comma-separated chain ids"),
-    tokens: z.string().optional().describe("Comma-separated token addresses"),
+    tokens: z
+      .string()
+      .optional()
+      .describe("Comma-separated chainId:address pairs (e.g. '8453:0x8335...')"),
     status: z
       .enum(["open", "closed", "all"])
       .optional()
@@ -1139,7 +1200,7 @@ lots.command("list", {
       .optional()
       .describe("Read open inventory as of this instant. ISO 8601. Defaults to now."),
     search: z.string().optional().describe("Substring search across token symbol and name"),
-    acquiredAfter: z
+    startDate: z
       .string()
       .optional()
       .describe("Only lots acquired at or after this instant. ISO 8601."),
@@ -1159,6 +1220,14 @@ lots.command("list", {
       .string()
       .optional()
       .describe("Inclusive upper bound on cost basis, in USD"),
+    minUnitCost: z
+      .string()
+      .optional()
+      .describe("Inclusive lower bound on cost per whole token, in USD"),
+    maxUnitCost: z
+      .string()
+      .optional()
+      .describe("Inclusive upper bound on cost per whole token, in USD"),
     sortBy: z
       .enum(["acquisitionTime", "costBasis"])
       .optional()
@@ -1177,11 +1246,13 @@ lots.command("list", {
         status: options.status,
         openAsOf: normalizeDateInput(options.openAsOf),
         search: options.search,
-        startDate: normalizeDateInput(options.acquiredAfter),
+        startDate: normalizeDateInput(options.startDate),
         minRemaining: options.minRemaining,
         maxRemaining: options.maxRemaining,
         minCostBasis: options.minCostBasis,
         maxCostBasis: options.maxCostBasis,
+        minUnitCost: options.minUnitCost,
+        maxUnitCost: options.maxUnitCost,
         sortBy: options.sortBy,
         sortDirection: options.sortDirection,
       })}`,
@@ -1191,14 +1262,33 @@ lots.command("list", {
 
 lots.command("assertions", {
   description:
-    "List every assertion written against a lot, oldest first, with the value each one replaced. " +
-    "An unknown lot reads as empty.",
+    "List the assertions written against a lot, oldest first, with the value each one replaced. " +
+    "Pages with --cursor; a null nextCursor means the last page. An unknown lot reads as empty.",
   env: authEnv,
   args: z.object({
     lotId: z.string().describe("Lot id from 'accounting lots list'"),
   }),
-  async run({ env, args }) {
-    return apiRequest(env, `/accounting/lots/${args.lotId}/assertions`);
+  options: z.object({
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(50)
+      .default(50)
+      .describe("Assertions per page, max 50"),
+    cursor: z
+      .string()
+      .optional()
+      .describe("nextCursor from the previous page"),
+  }),
+  async run({ env, args, options }) {
+    return apiRequest(
+      env,
+      `/accounting/lots/${args.lotId}/assertions${buildQuery({
+        limit: options.limit,
+        cursor: options.cursor,
+      })}`,
+    );
   },
 });
 
@@ -1218,11 +1308,11 @@ const writeAssertion = (env: AuthEnv, assertion: LotAssertion) =>
 
 // Every assertion names the account, chain, and token it applies to.
 const assertionTarget = {
-  accountId: z
+  smartAccountId: z
     .string()
     .describe("Account id the lot belongs to (from 'accounts list')"),
   chainId: z.number().int().positive().describe("Chain id"),
-  token: evmAddress.describe("Token contract address (0x...)"),
+  tokenAddress: evmAddress.describe("Token contract address (0x...)"),
 };
 
 assertions.command("seed", {
@@ -1237,7 +1327,7 @@ assertions.command("seed", {
       .string()
       .regex(AMOUNT_REGEX, "Must be a non-negative decimal (e.g. '1500.50')")
       .describe("Cost basis per whole token, in USD"),
-    acquiredAt: z
+    acquisitionTime: z
       .string()
       .describe("When the lot was acquired. ISO 8601, must be in the past."),
     quantity: z
@@ -1255,11 +1345,11 @@ assertions.command("seed", {
   async run({ env, options }) {
     return writeAssertion(env, {
       kind: "seed",
-      smartAccountId: options.accountId,
+      smartAccountId: options.smartAccountId,
       chainId: options.chainId,
-      tokenAddress: options.token,
+      tokenAddress: options.tokenAddress,
       unitPrice: options.unitPrice,
-      acquisitionTime: normalizeDateInput(options.acquiredAt),
+      acquisitionTime: normalizeDateInput(options.acquisitionTime),
       quantity: options.quantity,
       targetKey: options.targetKey,
     });
@@ -1288,7 +1378,7 @@ assertions.command("edit", {
       .regex(AMOUNT_REGEX, "Must be a non-negative decimal (e.g. '1500.50')")
       .optional()
       .describe("Corrected cost basis per whole token, in USD"),
-    acquiredAt: z
+    acquisitionTime: z
       .string()
       .optional()
       .describe("Corrected acquisition time. ISO 8601, must be in the past."),
@@ -1298,23 +1388,23 @@ assertions.command("edit", {
       .describe("Corrected lot this one carries basis from"),
   }),
   async run({ env, options }) {
-    if (!options.unitPrice && !options.acquiredAt && !options.originLotId) {
+    if (!options.unitPrice && !options.acquisitionTime && !options.originLotId) {
       throw new Error(
-        "An edit must assert at least one of --unit-price, --acquired-at, or --origin-lot-id.",
+        "An edit must assert at least one of --unit-price, --acquisition-time, or --origin-lot-id.",
       );
     }
 
     return writeAssertion(env, {
       kind: "edit",
-      smartAccountId: options.accountId,
+      smartAccountId: options.smartAccountId,
       chainId: options.chainId,
-      tokenAddress: options.token,
+      tokenAddress: options.tokenAddress,
       anchor: {
         sourceTransferId: options.sourceTransferId,
         originLotId: options.anchorOriginLotId ?? null,
       },
       unitPrice: options.unitPrice,
-      acquisitionTime: normalizeDateInput(options.acquiredAt),
+      acquisitionTime: normalizeDateInput(options.acquisitionTime),
       originLotId: options.originLotId,
     });
   },
@@ -1356,9 +1446,9 @@ assertions.command("revoke", {
 
     return writeAssertion(env, {
       kind: "revoke",
-      smartAccountId: options.accountId,
+      smartAccountId: options.smartAccountId,
       chainId: options.chainId,
-      tokenAddress: options.token,
+      tokenAddress: options.tokenAddress,
       targetKey: options.targetKey,
       anchor: options.sourceTransferId
         ? {
@@ -1385,9 +1475,9 @@ assertions.command("designate", {
   async run({ env, options }) {
     return writeAssertion(env, {
       kind: "designate",
-      smartAccountId: options.accountId,
+      smartAccountId: options.smartAccountId,
       chainId: options.chainId,
-      tokenAddress: options.token,
+      tokenAddress: options.tokenAddress,
       transferId: options.transferId,
     });
   },
@@ -1397,8 +1487,8 @@ assertions.command("bulk", {
   description:
     "Write up to 250 assertions from a JSON file, as one atomic insert: a rejected row leaves nothing behind. " +
     "The file holds an array of assertion objects, each shaped like the body the single-assertion commands send " +
-    "({ kind, smartAccountId, chainId, tokenAddress, ... }). Every seed must carry a targetKey, so re-running the " +
-    "same file corrects those lots instead of creating a second set of them.",
+    "({ kind, smartAccountId, chainId, tokenAddress, ... }); field names match the single-assertion flags. " +
+    "Every seed must carry a targetKey, so re-running the same file corrects those lots instead of creating a second set of them.",
   env: authEnv,
   options: z.object({
     file: z
@@ -1484,7 +1574,9 @@ imports.command("status", {
     "Check the per-chain backfill for an import. Name the same chains the import was created with.",
   env: authEnv,
   args: z.object({
-    accountId: z.string().describe("Imported account id from 'accounting imports create'"),
+    smartAccountId: z
+      .string()
+      .describe("Imported account id from 'accounting imports create'"),
   }),
   options: z.object({
     chainIds: z
@@ -1494,7 +1586,7 @@ imports.command("status", {
   async run({ env, args, options }) {
     return apiRequest(
       env,
-      `/accounting/imports/${args.accountId}/jobs${buildQuery({
+      `/accounting/imports/${args.smartAccountId}/jobs${buildQuery({
         chainIds: options.chainIds,
       })}`,
     );
@@ -1502,6 +1594,44 @@ imports.command("status", {
 });
 
 accounting.command(imports);
+
+const recompute = Cli.create("recompute", {
+  description:
+    "Track the lot recompute. Assertion writes queue one, and reports and lot reads reflect a write only once it finishes.",
+});
+
+recompute.command("current", {
+  description:
+    "Read the recompute in flight or most recently settled for the org. A null job means lots are current.",
+  env: authEnv,
+  async run({ env }) {
+    return apiRequest(env, "/accounting/recompute");
+  },
+});
+
+recompute.command("job", {
+  description:
+    "Poll a recompute. Status 'unknown' still means settled. A non-null nextJobId means a write landed mid-run: poll that job next.",
+  env: authEnv,
+  args: z.object({
+    jobId: z.string().describe("Job id from 'accounting recompute current' or 'run'"),
+  }),
+  async run({ env, args }) {
+    return apiRequest(env, `/accounting/recompute/${args.jobId}`);
+  },
+});
+
+recompute.command("run", {
+  description:
+    "Queue a full lot recompute. Writes already queue one, so this is only for forcing a rebuild. " +
+    "Returns the running job instead of queueing a second. Requires a write-scoped key.",
+  env: authEnv,
+  async run({ env }) {
+    return apiRequest(env, "/accounting/recompute", { method: "PUT" });
+  },
+});
+
+accounting.command(recompute);
 
 cli.command(accounting);
 

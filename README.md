@@ -201,36 +201,39 @@ splits accounting reports generate realized-gains --period lastYear
 splits accounting reports generate realized-gains --period lastYear --file-format pdf --out ./rgl.pdf
 splits accounting reports generate statement --period lastMonth --out ./reports/
 
+# Transactions-only filters mirror 'transactions list'
+splits accounting reports generate transactions --period lastMonth --memo payroll --min-amount 1000 --outbound
+
 # List reports generated for the org, and poll one that was queued
 splits accounting reports list
 splits accounting reports job <jobId>
 ```
 
-Reports: `transactions`, `lots`, `lot-timeline`, `realized-gains`, `tokens`, `statement`. The statement is always a PDF. Filters (`--account-ids`, `--chain-ids`, `--tokens`, `--start-date` / `--end-date` or `--period`) match the app's; `--account-ids` takes account ids from `splits accounts list`, not addresses.
+Reports: `transactions`, `lots`, `lot-timeline`, `realized-gains`, `tokens`, `statement`. The statement is always a PDF. Filters match the app's, and each report ignores the ones it doesn't read (`--help` names which reports take which). `--account-ids` takes account ids from `splits accounts list`, not addresses. `--out` won't replace an existing file unless you pass `--force`.
 
 ```sh
 # Read tax lots, and the assertion history behind one
 splits accounting lots list --page-size 50 --status open
 splits accounting lots list --account-ids <id> --chain-ids 8453 --sort-by costBasis --sort-direction desc
-splits accounting lots assertions <lotId>
+splits accounting lots assertions <lotId> --limit 50 --cursor <nextCursor>
 ```
 
 ```sh
 # Seed opening inventory the org held before Splits (quantity is in base units).
 # --target-key names the lot; rerun with the same key to correct it.
-splits accounting assertions seed --account-id <id> --chain-id 8453 --token 0xabc... \
-  --unit-price 1500.50 --acquired-at 2024-03-01 --quantity 1000000 --target-key usdc-opening-2024
+splits accounting assertions seed --smart-account-id <id> --chain-id 8453 --token-address 0xabc... \
+  --unit-price 1500.50 --acquisition-time 2024-03-01 --quantity 1000000 --target-key usdc-opening-2024
 
 # Correct a lot the engine derived, naming it by the transfer it opened from
-splits accounting assertions edit --account-id <id> --chain-id 8453 --token 0xabc... \
+splits accounting assertions edit --smart-account-id <id> --chain-id 8453 --token-address 0xabc... \
   --source-transfer-id <transferId> --unit-price 1600
 
 # Mark an inbound as drawing from seeded inventory, so it carries basis
-splits accounting assertions designate --account-id <id> --chain-id 8453 --token 0xabc... \
+splits accounting assertions designate --smart-account-id <id> --chain-id 8453 --token-address 0xabc... \
   --transfer-id <transferId>
 
 # Withdraw an assertion (names exactly one of the three targets)
-splits accounting assertions revoke --account-id <id> --chain-id 8453 --token 0xabc... --target-key <key>
+splits accounting assertions revoke --smart-account-id <id> --chain-id 8453 --token-address 0xabc... --target-key <key>
 
 # Write up to 250 at once, as one atomic insert
 splits accounting assertions bulk --file ./seeds.json
@@ -241,10 +244,17 @@ splits accounting assertions bulk --file ./seeds.json
 splits accounting imports create --name "Old treasury" --address 0xabc... \
   --chain-ids 8453,1 --cutoff-at 2026-01-15
 splits accounting imports list
-splits accounting imports status <accountId> --chain-ids 8453,1
+splits accounting imports status <smartAccountId> --chain-ids 8453,1
 ```
 
-Writing assertions and creating imports need a write-scoped, user-bound API key. Generating a report also needs a user-bound key, since the report records who asked for it.
+```sh
+# Assertion writes queue a lot recompute; lots and reports reflect a write once it settles
+splits accounting recompute current
+splits accounting recompute job <jobId>
+splits accounting recompute run   # force a full rebuild
+```
+
+Writing assertions, creating imports, and generating reports need a write-scoped, user-bound API key. Queueing a recompute needs write scope.
 
 ### Members
 
@@ -292,6 +302,7 @@ The MCP server exposes these tools:
 - `accounting_lots_list` / `accounting_lots_assertions` — Read tax lots and a lot's assertion history
 - `accounting_assertions_seed` / `_edit` / `_revoke` / `_designate` / `_bulk` — Write lot assertions
 - `accounting_imports_create` / `_list` / `_status` — Import an external address and poll its backfill
+- `accounting_recompute_current` / `_job` / `_run` — Track or force the lot recompute that applies assertion writes
 
 ## Configuration
 
