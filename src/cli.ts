@@ -916,6 +916,7 @@ const sleep = (ms: number) =>
 const waitForReportUrl = async (
   env: AuthEnv,
   jobId: string,
+  reportId: string,
   timeoutSeconds: number,
 ): Promise<string> => {
   const deadline = Date.now() + timeoutSeconds * 1000;
@@ -926,6 +927,13 @@ const waitForReportUrl = async (
       env,
       `/accounting/reports/jobs/${jobId}`,
     );
+    // Queue ids repeat over a queue's lifetime, so a job id can also name an
+    // older report. Downloading that one would write the wrong file.
+    if (data.reportId !== reportId) {
+      throw new Error(
+        `Job ${jobId} reports on ${data.reportId}, not the report just generated (${reportId}). Fetch it from \`accounting reports list\` instead.`,
+      );
+    }
     if (data.failed) {
       throw new Error(
         `Report generation failed (job ${jobId})${
@@ -1115,7 +1123,12 @@ reports.command("generate", {
     const downloadUrl =
       data.csvDownloadUrl ??
       (data.jobId
-        ? await waitForReportUrl(env, data.jobId, options.timeout)
+        ? await waitForReportUrl(
+            env,
+            data.jobId,
+            data.reportId,
+            options.timeout,
+          )
         : null);
 
     if (!downloadUrl) {
