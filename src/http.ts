@@ -2,7 +2,13 @@
 // unauthenticated request paths so error parsing, timeouts, and the
 // SplitsApiError shape stay in one place.
 
+import { createWriteStream } from "node:fs";
+import { rename, rm, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
+import { resolve } from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import type { ReadableStream as WebReadableStream } from "node:stream/web";
 
 import { resolveApiKey, resolveApiUrl } from "./config.js";
 
@@ -105,4 +111,71 @@ export async function httpRequest<T = unknown>(
     );
   }
   return res.json() as Promise<T>;
+}
+
+// Generated reports are uploaded to the asset host and handed back as a plain
+// URL, so the download is an unauthenticated GET. Kept separate from
+// httpRequest because the body is a file, not JSON.
+const DOWNLOAD_TIMEOUT_MS = 120_000;
+
+export async function downloadToFile(
+  url: string,
+  destination: string,
+): Promise<{ path: string; bytes: number }> {
+  if (!url.startsWith("https://")) {
+    throw new SplitsApiError(
+      "invalid-download-url",
+      0,
+      `Refusing to download a report over a non-https URL: ${url}`,
+    );
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      headers: { "User-Agent": USER_AGENT },
+      signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+    });
+  } catch (err) {
+    if (err instanceof Error && err.name === "TimeoutError") {
+      throw new SplitsApiError(
+        "network-timeout",
+        0,
+        `Report download timed out after ${DOWNLOAD_TIMEOUT_MS / 1000}s.`,
+      );
+    }
+    throw err;
+  }
+
+  if (!res.ok || !res.body) {
+    throw new SplitsApiError(
+      "report-download-failed",
+      res.status,
+      `Report download failed: ${res.status}`,
+    );
+  }
+
+  // Streamed so a large report never sits in memory, and written beside the
+  // destination first so a failed download leaves no truncated file behind.
+  const partial = `${destination}.partial`;
+  try {
+    await pipeline(
+      Readable.fromWeb(res.body as WebReadableStream),
+      createWriteStream(partial),
+    );
+    await rename(partial, destination);
+  } catch (err) {
+    await rm(partial, { force: true });
+    if (err instanceof Error && err.name === "TimeoutError") {
+      throw new SplitsApiError(
+        "network-timeout",
+        0,
+        `Report download timed out after ${DOWNLOAD_TIMEOUT_MS / 1000}s.`,
+      );
+    }
+    throw err;
+  }
+
+  const { size } = await stat(destination);
+  return { path: resolve(destination), bytes: size };
 }
