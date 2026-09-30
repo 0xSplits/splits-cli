@@ -58,6 +58,28 @@ splits auth delete-key
 
 The private key never appears in any command's response — only the derived address and a warning. The file at `~/.splits/config.json` is the only copy; back it up if the key will hold funds.
 
+## Agent-created workspaces (no human, no passkey)
+
+An agent can create its own workspace with one command and no API key in hand. The local EOA becomes the sole signer (1-of-1) of the workspace's root and treasury accounts, and the returned owner-scoped API key is saved to `~/.splits/config.json` so every other command works right away.
+
+```sh
+# Generates a local key when none exists, proves control of it, creates the
+# workspace, saves the API key, and prints the treasury (deposit) address
+splits workspace create --name "My agent"
+
+# Then: fund the treasury address on any enabled chain and move money
+splits accounts balances
+splits transactions create transfer --account <treasury> --chain-id 8453 --recipient 0x... --token 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 --amount 1
+splits transactions sign <transaction-id>
+```
+
+Rules worth knowing:
+
+- One workspace per key. Re-running `workspace create` returns the same workspace with a fresh API key.
+- There is no recovery path. If `~/.splits/config.json` is lost, the workspace is lost. Add a human signer through `accounts update-signers` when you want one.
+- Offramp still needs a human, because it requires KYC.
+- `--chain-ids 8453,1` limits the enabled networks; the default is the standard set every new workspace gets.
+
 ## Registered EOA signers
 
 To use an EOA as a signer on one or more smart accounts, first register it under your user, then attach the returned id via `accounts update-signers`. Registration is a one-time step per address; the same id can be attached to any number of accounts.
@@ -291,6 +313,7 @@ The MCP server exposes these tools:
 - `accounts_create` — Create a new subaccount
 - `accounts_update_signers` — Propose adding/removing signers (EOA adds reference ids from `auth_register_signer`)
 - `transactions_sign` — Sign a pending multisig transaction with the local EOA
+- `workspace_create` — Create a workspace controlled by the local EOA and save its API key (no human, no passkey)
 - `auth_whoami` — Show org, API key source, and local signing key (if any)
 - `auth_login` / `auth_logout` — Save or remove a local API key (stdin-preferred; `--api-key` flag refused under MCP)
 - `auth_create_key` / `auth_delete_key` / `auth_import_key` — Manage a local EOA signing key

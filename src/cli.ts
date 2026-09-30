@@ -10,6 +10,7 @@ import {
   CONFIG_FILE_PATH,
   defaultKeyName,
   loadLocalKeyPublic,
+  loadLocalPrivateKey,
   removeApiKey,
   removeKey,
   resolveApiKey,
@@ -2490,6 +2491,131 @@ org.command("create", {
 });
 
 cli.command(org);
+
+// =============================================================================
+// workspace (unauthenticated creation; the returned API key is saved locally)
+// =============================================================================
+
+const workspace = Cli.create("workspace", {
+  description:
+    "Create and operate a workspace controlled by the local EOA (no human, no passkey)",
+});
+
+type WorkspaceResponse = {
+  data: {
+    workspaceId: string;
+    name: string;
+    created: boolean;
+    apiKey: string;
+    signer: string;
+    treasury: { id: string; address: string };
+    root: { address: string };
+    chainIds: number[];
+  };
+};
+
+workspace.command("create", {
+  description:
+    "Create a Splits workspace controlled by the local EOA, with no human in the loop. " +
+    "Generates a local signing key when none exists, proves control of it to the backend " +
+    "by signing a one-time challenge, and creates a workspace whose root and treasury " +
+    "accounts are both signed 1-of-1 by that key. Saves the returned owner-scoped API key " +
+    "to ~/.splits/config.json so every other command works immediately, and returns the " +
+    "treasury address: the deposit address, identical on every enabled network. " +
+    "One workspace per key: re-running returns the same workspace with a fresh API key. " +
+    "There is no recovery path; back up ~/.splits/config.json. Offramp still needs a human (KYC). " +
+    "Next: fund the treasury, then `transactions create transfer --account <treasury> ...` " +
+    "and `transactions sign <id>`.",
+  env: publicEnv,
+  options: z.object({
+    name: z
+      .string()
+      .min(1)
+      .max(255)
+      .optional()
+      .describe('Workspace name. Defaults to "Agent workspace".'),
+    chainIds: z
+      .string()
+      .regex(/^\d+(,\d+)*$/, "Expected comma-separated chain IDs (e.g. 8453,1)")
+      .optional()
+      .describe(
+        "Comma-separated chain IDs to enable (e.g. 8453,1). Defaults to the standard set every workspace gets.",
+      ),
+  }),
+  async run({ env, options }) {
+    let privateKey = await loadLocalPrivateKey();
+    let keyCreated = false;
+    if (privateKey === null) {
+      privateKey = generatePrivateKey();
+      const generated = privateKeyToAccount(privateKey);
+      await saveKey({
+        name: defaultKeyName(generated.address),
+        address: generated.address,
+        privateKey,
+      });
+      keyCreated = true;
+    }
+    const account = privateKeyToAccount(privateKey);
+
+    const challenge = await httpRequest<{ data: { message: string } }>(
+      env,
+      "/workspaces/challenge",
+      {
+        method: "POST",
+        requireAuth: false,
+        body: { address: account.address },
+      },
+    );
+    const signature = await account.signMessage({
+      message: challenge.data.message,
+    });
+
+    const chainIds = splitCsv(options.chainIds).map(Number);
+    const result = await httpRequest<WorkspaceResponse>(env, "/workspaces", {
+      method: "POST",
+      requireAuth: false,
+      body: {
+        address: account.address,
+        signature,
+        ...(options.name !== undefined && { name: options.name }),
+        ...(chainIds.length > 0 && { chainIds }),
+      },
+    });
+
+    // The API key never appears in the command output (MCP transcripts are
+    // logged); it goes straight to the keystore, like `auth login`.
+    await saveApiKey(result.data.apiKey, { apiUrl: env.SPLITS_API_URL });
+
+    const envKeySet =
+      typeof process.env.SPLITS_API_KEY === "string" &&
+      process.env.SPLITS_API_KEY.length > 0;
+
+    return {
+      workspaceId: result.data.workspaceId,
+      name: result.data.name,
+      created: result.data.created,
+      treasuryAddress: result.data.treasury.address,
+      signerAddress: result.data.signer,
+      chainIds: result.data.chainIds,
+      keyCreated,
+      apiKeySaved: true,
+      path: CONFIG_FILE_PATH,
+      ...(envKeySet
+        ? {
+            warning:
+              "SPLITS_API_KEY env var is set and takes precedence over the saved key. " +
+              "Unset it (or restart the MCP server without it) to act as this workspace.",
+          }
+        : {}),
+      nextSteps:
+        `Send funds to ${result.data.treasury.address} on any enabled chain. Then run ` +
+        "`accounts balances`, `transactions create transfer --account <treasuryAddress> ...`, " +
+        "and `transactions sign <id>`.",
+    };
+  },
+});
+
+cli.command(workspace);
 
 cli.serve();
 export default cli;
