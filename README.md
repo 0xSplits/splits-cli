@@ -2,6 +2,8 @@
 
 CLI and MCP server for the [Splits](https://splits.org) platform.
 
+Using this CLI or MCP server with an agent? Start with the [Splits agent guide](https://splits.org/llms.txt).
+
 ## Install
 
 ```sh
