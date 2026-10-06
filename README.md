@@ -41,22 +41,37 @@ splits auth login --api-key sk_...
 splits auth logout
 ```
 
-Precedence is `SPLITS_API_KEY` env var → saved local config → error. `splits auth whoami` reports `apiKeySource` so you can tell where credentials came from. The same file (`~/.splits/config.json`, mode 0600, auto-gitignored) can also hold a local signing key — see below.
+`auth login` checks the key against the API and saves it as a **workspace** named after the org (or `--name <alias>`), then makes it the active one. Log in once per org to keep several workspaces side by side:
+
+```sh
+echo $ACME_KEY | splits auth login              # saved as "acme"
+echo $PETT_KEY | splits auth login --name pett  # saved as "pett", now active
+
+splits auth workspaces                # list saved workspaces, marks the active one
+splits auth use acme                  # switch the active workspace
+splits accounts list --workspace pett # run one command in another workspace
+splits auth logout pett               # remove one workspace (defaults to the active one)
+```
+
+Precedence for the API key is `SPLITS_API_KEY` env var → `--workspace` → `SPLITS_WORKSPACE` env var → active workspace → error. `splits auth whoami` reports `workspace` and `apiKeySource` so you can tell where credentials came from. The same file (`~/.splits/config.json`, mode 0600, auto-gitignored) also holds local signing keys — see below. A config file written by an older CLI keeps working: its key is read as a workspace named `default`, and the file is rewritten in the new format on the next change.
 
 ## Local signing key
 
 The CLI can generate or import an EOA (Ethereum Externally Owned Account) and use it to sign pending multisig transactions locally, instead of opening the web app for the "Sign URL" flow. Useful for agents, automations, and MCP-driven workflows.
 
 ```sh
-# Generate a new EOA and save it locally (single key in v1)
+# Generate a new EOA and add it to the local keys
 splits auth create-key
 
 # Import an existing private key (stdin preferred; flag refused under MCP mode)
 echo $PRIVATE_KEY | splits auth import-key
 
-# Remove the local key (does not revoke the on-chain signer)
-splits auth delete-key
+# Remove a local key (does not revoke the on-chain signer).
+# The address can be omitted when only one key is saved.
+splits auth delete-key <address>
 ```
+
+Several keys can be saved, and they are not tied to a workspace. With one key, `transactions sign` uses it; with several, pass `--key <address>`.
 
 The private key never appears in any command's response — only the derived address and a warning. The file at `~/.splits/config.json` is the only copy; back it up if the key will hold funds.
 
@@ -85,6 +100,9 @@ splits transactions sign <transaction-id>
 
 # Record the signature without submitting the UserOp
 splits transactions sign <transaction-id> --no-submit
+
+# Pick the local key when several are saved
+splits transactions sign <transaction-id> --key <address>
 ```
 
 ## Usage
@@ -292,10 +310,13 @@ The MCP server exposes these tools:
 - `accounts_rename` — Rename a subaccount
 - `accounts_create` — Create a new subaccount
 - `accounts_update_signers` — Propose adding/removing signers (EOA adds reference ids from `auth_register_signer`)
-- `transactions_sign` — Sign a pending multisig transaction with the local EOA
-- `auth_whoami` — Show org, API key source, and local signing key (if any)
-- `auth_login` / `auth_logout` — Save or remove a local API key (stdin-preferred; `--api-key` flag refused under MCP)
-- `auth_create_key` / `auth_delete_key` / `auth_import_key` — Manage a local EOA signing key
+- `transactions_sign` — Sign a pending multisig transaction with a local EOA
+- `auth_whoami` — Show org, workspace, API key source, and local signing keys
+- `auth_login` / `auth_logout` — Save or remove a workspace (stdin-preferred; `--api-key` flag refused under MCP)
+- `auth_workspaces` / `auth_use` — List saved workspaces, switch the active one
+- `auth_create_key` / `auth_delete_key` / `auth_import_key` — Manage local EOA signing keys
+
+Every tool that calls the API takes an optional `workspace` argument, so one MCP server can work across several saved workspaces.
 - `auth_register_signer` / `auth_signers` — Register and list EOA signers under the acting user
 - `members_list` — List org members
 - `members_signers` — List passkey signers for a member
@@ -312,6 +333,7 @@ The MCP server exposes these tools:
 |----------|----------|-------------|
 | `SPLITS_API_KEY` | No\* | API key from [Splits Settings](https://app.splits.org/settings/team/api-keys/). Takes precedence over `splits auth login`. |
 | `SPLITS_API_URL` | No | Override the API base URL (defaults to production). Takes precedence over any URL saved by `auth login --api-url`. |
+| `SPLITS_WORKSPACE` | No | Workspace alias to use instead of the active one. `--workspace` takes precedence over it. |
 | `SPLITS_MCP_MODE` | No | Set to `1` when running as an MCP server. Refuses flag-based secrets (`--api-key`, `--private-key`) so secrets don't appear in tool-call transcripts. |
 
-\* At least one credential source is required: either the env var or a key saved via `splits auth login`.
+\* At least one credential source is required: either the env var or a workspace saved via `splits auth login`.

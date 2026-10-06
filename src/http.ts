@@ -10,7 +10,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as WebReadableStream } from "node:stream/web";
 
-import { resolveApiKey, resolveApiUrl } from "./config.js";
+import { type CredentialSource, resolveCredentials } from "./config.js";
 
 // Build the User-Agent the backend's `detectPublicApiSource` parses to tag
 // transactions with their origin (CLI vs. MCP vs. raw API). Without this
@@ -46,40 +46,45 @@ export class SplitsApiError extends Error {
 // wedged TCP connection doesn't hang an MCP tool call indefinitely.
 const REQUEST_TIMEOUT_MS = 30_000;
 
-type HttpEnv = {
-  SPLITS_API_KEY?: string;
-  SPLITS_API_URL?: string;
-};
-
 type HttpOptions = {
   method?: "GET" | "PUT" | "POST" | "DELETE";
   body?: Record<string, unknown>;
   requireAuth: boolean;
+  // `auth login` checks a key before it is saved, so it passes the key and
+  // URL directly instead of resolving them through the config.
+  credentials?: { apiKey: string; apiUrl: string };
+};
+
+const resolveFromConfig = async (
+  env: CredentialSource,
+): Promise<{ apiKey: string | undefined; apiUrl: string }> => {
+  const resolved = await resolveCredentials(env);
+  return { apiKey: resolved.apiKey?.value, apiUrl: resolved.apiUrl };
 };
 
 export async function httpRequest<T = unknown>(
-  env: HttpEnv,
+  env: CredentialSource,
   path: string,
   options: HttpOptions,
 ): Promise<T> {
+  const credentials = options.credentials ?? (await resolveFromConfig(env));
+
   const headers: Record<string, string> = { "User-Agent": USER_AGENT };
   if (options.requireAuth) {
-    const resolved = await resolveApiKey(env);
-    if (!resolved) {
+    if (credentials.apiKey === undefined) {
       throw new SplitsApiError(
         "no-api-key",
         0,
-        "No API key configured. Run `splits auth login` or export SPLITS_API_KEY.",
+        "No API key configured. Run `splits auth login`, pick a workspace with `splits auth use`, or export SPLITS_API_KEY.",
       );
     }
-    headers["Authorization"] = `Bearer ${resolved.value}`;
+    headers["Authorization"] = `Bearer ${credentials.apiKey}`;
   }
   if (options.body) {
     headers["Content-Type"] = "application/json";
   }
 
-  const apiUrl = await resolveApiUrl(env);
-  const url = `${apiUrl}/public/v1${path}`;
+  const url = `${credentials.apiUrl}/public/v1${path}`;
 
   let res: Response;
   try {

@@ -4,13 +4,8 @@
 
 import { privateKeyToAccount } from "viem/accounts";
 
-import { loadLocalKeyPublic, loadLocalPrivateKey } from "./config.js";
+import { type CredentialSource, loadLocalKey } from "./config.js";
 import { httpRequest, SplitsApiError } from "./http.js";
-
-type SigningEnv = {
-  SPLITS_API_KEY?: string;
-  SPLITS_API_URL?: string;
-};
 
 export type SignResponse = {
   data: {
@@ -31,7 +26,7 @@ type TxGetResponse = { data: { signingHash?: string | null } };
 const SIGNING_HASH_RE = /^0x[0-9a-f]{64}$/i;
 
 const fetchSigningHash = async (
-  env: SigningEnv,
+  env: CredentialSource,
   txId: string,
 ): Promise<`0x${string}`> => {
   const tx = await httpRequest<TxGetResponse>(env, `/transactions/${txId}`, {
@@ -62,13 +57,12 @@ export const signHash = (
   privateKeyToAccount(privateKey).signMessage({ message: { raw: hash } });
 
 export async function signTransactionLocally(
-  env: SigningEnv,
+  env: CredentialSource,
   txId: string,
-  opts: { submit: boolean },
+  opts: { submit: boolean; keyAddress?: string },
 ): Promise<SignResponse> {
-  const privateKey = await loadLocalPrivateKey();
-  const publicInfo = await loadLocalKeyPublic();
-  if (privateKey === null || publicInfo === null) {
+  const localKey = await loadLocalKey(opts.keyAddress);
+  if (localKey === null) {
     throw new SplitsApiError(
       "no-local-key",
       0,
@@ -76,6 +70,7 @@ export async function signTransactionLocally(
     );
   }
 
+  const { privateKey } = localKey;
   const account = privateKeyToAccount(privateKey);
 
   const postSignature = async (
