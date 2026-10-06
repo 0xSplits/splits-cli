@@ -283,6 +283,53 @@ describe("auth use and logout", () => {
   });
 });
 
+describe("auth whoami", () => {
+  beforeEach(resetConfig);
+
+  it("fills in the org of a workspace migrated from v1", async () => {
+    await writeFile(V1_FILE);
+
+    await config.refreshWorkspaceOrg("default", {
+      orgId: "org-1",
+      orgName: "Acme",
+    });
+
+    const [workspace] = await config.listWorkspaces();
+    assert.equal(workspace.orgId, "org-1");
+    assert.equal(workspace.orgName, "Acme");
+  });
+
+  it("keeps the alias when the org is renamed", async () => {
+    await login({ orgId: "org-1", orgName: "Acme", apiKey: "sk_1" });
+
+    await config.refreshWorkspaceOrg("acme", {
+      orgId: "org-1",
+      orgName: "Acme Labs",
+    });
+
+    assert.deepEqual(
+      (await config.listWorkspaces()).map((w) => [w.alias, w.orgName]),
+      [["acme", "Acme Labs"]],
+    );
+  });
+
+  it("writes nothing when the org has not changed", async () => {
+    await writeFile(V1_FILE);
+    await config.refreshWorkspaceOrg("default", {
+      orgId: "org-1",
+      orgName: "Acme",
+    });
+    const before = await fs.stat(CONFIG_PATH);
+
+    await config.refreshWorkspaceOrg("default", {
+      orgId: "org-1",
+      orgName: "Acme",
+    });
+
+    assert.equal((await fs.stat(CONFIG_PATH)).mtimeMs, before.mtimeMs);
+  });
+});
+
 describe("local keys", () => {
   beforeEach(resetConfig);
 

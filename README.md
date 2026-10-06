@@ -53,7 +53,7 @@ splits accounts list --workspace pett # run one command in another workspace
 splits auth logout pett               # remove one workspace (defaults to the active one)
 ```
 
-Precedence for the API key is `SPLITS_API_KEY` env var → `--workspace` → `SPLITS_WORKSPACE` env var → active workspace → error. `splits auth whoami` reports `workspace` and `apiKeySource` so you can tell where credentials came from. The same file (`~/.splits/config.json`, mode 0600, auto-gitignored) also holds local signing keys — see below. A config file written by an older CLI keeps working: its key is read as a workspace named `default`, and the file is rewritten in the new format on the next change.
+Precedence for the API key is `SPLITS_API_KEY` env var → `--workspace` → `SPLITS_WORKSPACE` env var → active workspace → error. `splits auth whoami` reports `workspace` and `apiKeySource` so you can tell where credentials came from, and updates the org id and name that `auth workspaces` shows for that workspace (a workspace carried over from an older config has none until then). The same file (`~/.splits/config.json`, mode 0600, auto-gitignored) also holds local signing keys — see below. A config file written by an older CLI keeps working: its key is read as a workspace named `default`, and the file is rewritten in the new format on the next change.
 
 ## Local signing key
 

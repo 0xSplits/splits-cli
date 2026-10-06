@@ -14,6 +14,7 @@ import {
   defaultKeyName,
   listKeys,
   listWorkspaces,
+  refreshWorkspaceOrg,
   removeKey,
   removeWorkspace,
   resolveCredentials,
@@ -239,7 +240,8 @@ auth.command("whoami", {
     "keys saved by `splits auth create-key` or `import-key`. For each local key registered " +
     "with the backend, `localKeys[].signerId` is the id needed by " +
     "`accounts update-signers --add-eoa-signer-ids`; null means the key exists locally but " +
-    "has not been registered (see `auth register-signer`).",
+    "has not been registered (see `auth register-signer`). " +
+    "Also updates the org id and name saved for the workspace, which `auth workspaces` shows.",
   env: authEnv,
   options: workspaceOption,
   async run({ env: processEnv, options }) {
@@ -253,9 +255,28 @@ auth.command("whoami", {
       );
     }
     const [response, localKeys] = await Promise.all([
-      apiRequest<{ data: Record<string, unknown> }>(env, "/auth/whoami"),
+      apiRequest<{
+        data: { orgId: string; orgName: string | null } & Record<
+          string,
+          unknown
+        >;
+      }>(env, "/auth/whoami"),
       listKeys(),
     ]);
+
+    const workspace =
+      resolved.apiKey.source === "env" ? null : resolved.workspace;
+    if (workspace !== null) {
+      try {
+        await refreshWorkspaceOrg(workspace, {
+          orgId: response.data.orgId,
+          orgName: response.data.orgName,
+        });
+      } catch {
+        // A config that cannot be written (lock held, read-only home) must not
+        // fail whoami. The saved org stays as it was until the next whoami.
+      }
+    }
 
     // Look up the registered signer ids for the local addresses. One extra
     // GET per whoami, tolerant of failure: whoami is meant to be cheap and
@@ -279,7 +300,7 @@ auth.command("whoami", {
       ...response,
       data: {
         ...response.data,
-        workspace: resolved.apiKey.source === "env" ? null : resolved.workspace,
+        workspace,
         apiKeySource: resolved.apiKey.source,
         localKeys: localKeys.map((key) => ({
           ...key,

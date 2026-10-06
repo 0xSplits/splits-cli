@@ -421,6 +421,20 @@ export const useWorkspace = (alias: string): Promise<WorkspaceInfo> =>
     return toWorkspaceInfo(config, alias, workspace);
   });
 
+// The org is saved at login and can be renamed on the server later, and a
+// workspace migrated from v1 has no org at all. `auth whoami` already fetches
+// the org, so it passes it here to keep the saved copy current.
+export const refreshWorkspaceOrg = (
+  alias: string,
+  org: { orgId: string; orgName: string | null },
+): Promise<void> =>
+  updateConfig((config) => {
+    const workspace = config.workspaces[alias];
+    if (!workspace) return;
+    workspace.orgId = org.orgId;
+    workspace.orgName = org.orgName;
+  });
+
 // Logging out the active workspace hands "active" to the only one left, if
 // exactly one is left. With several left, the user picks with `auth use`.
 export const removeWorkspace = (
