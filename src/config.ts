@@ -11,14 +11,12 @@ import { join } from "node:path";
 
 import { z } from "incur";
 
+import { withLock } from "./lock.js";
+
 const CONFIG_DIR = join(homedir(), ".splits");
 const CONFIG_PATH = join(CONFIG_DIR, "config.json");
 const GITIGNORE_PATH = join(CONFIG_DIR, ".gitignore");
 const LOCK_PATH = join(CONFIG_DIR, "config.json.lock");
-
-const STALE_LOCK_MS = 10_000;
-const LOCK_RETRY_MS = 25;
-const LOCK_TIMEOUT_MS = 2 * STALE_LOCK_MS;
 
 export const CONFIG_FILE_PATH = CONFIG_PATH;
 export const DEFAULT_API_URL = "https://server.production.splits.org";
@@ -219,62 +217,17 @@ const writeConfig = async (config: Config): Promise<void> => {
   await fs.rename(tmp, CONFIG_PATH);
 };
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-const acquireLock = async (): Promise<void> => {
-  const deadline = Date.now() + LOCK_TIMEOUT_MS;
-  for (;;) {
-    try {
-      const handle = await fs.open(
-        LOCK_PATH,
-        fsConstants.O_WRONLY |
-          fsConstants.O_CREAT |
-          fsConstants.O_EXCL |
-          fsConstants.O_NOFOLLOW,
-        0o600,
-      );
-      await handle.close();
-      return;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-    }
-    const age = await fs
-      .lstat(LOCK_PATH)
-      .then((st) => Date.now() - st.mtimeMs)
-      .catch(() => 0);
-    if (age > STALE_LOCK_MS) {
-      await fs.rm(LOCK_PATH, { force: true });
-      continue;
-    }
-    if (Date.now() > deadline) {
-      throw new Error(
-        `Config at ${CONFIG_PATH} is locked by another splits process (${LOCK_PATH}). ` +
-          `Try again, or delete the lock file if no splits process is running.`,
-      );
-    }
-    await sleep(LOCK_RETRY_MS);
-  }
-};
-
-let changeQueue: Promise<unknown> = Promise.resolve();
-
-const updateConfig = <T>(change: (config: Config) => T): Promise<T> => {
-  const run = async (): Promise<T> => {
-    await ensureDir();
-    await acquireLock();
-    try {
-      const config = await readConfig();
-      const before = JSON.stringify(config);
-      const result = change(config);
-      if (JSON.stringify(config) !== before) await writeConfig(config);
-      return result;
-    } finally {
-      await fs.rm(LOCK_PATH, { force: true });
-    }
-  };
-  const next = changeQueue.then(run, run);
-  changeQueue = next.catch(() => undefined);
-  return next;
+const updateConfig = async <T>(
+  change: (config: Config) => T,
+): Promise<T> => {
+  await ensureDir();
+  return withLock(LOCK_PATH, async () => {
+    const config = await readConfig();
+    const before = JSON.stringify(config);
+    const result = change(config);
+    if (JSON.stringify(config) !== before) await writeConfig(config);
+    return result;
+  });
 };
 
 // ----- Workspaces -----
