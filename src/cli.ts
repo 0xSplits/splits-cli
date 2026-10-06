@@ -312,7 +312,8 @@ auth.command("login", {
       .url()
       .optional()
       .describe(
-        "Optional API base URL override to persist alongside the key (e.g. staging).",
+        "Optional API base URL override to persist alongside the key (e.g. staging). " +
+          "Defaults to SPLITS_API_URL when that is set, so the saved URL is the one the key was checked against.",
       ),
     name: z
       .string()
@@ -339,14 +340,19 @@ auth.command("login", {
       );
     }
 
+    // The workspace keeps the URL the key was checked against, so a key
+    // checked against SPLITS_API_URL still goes there once the env is unset.
+    const apiUrl =
+      options.apiUrl ??
+      (env.SPLITS_API_URL !== undefined && env.SPLITS_API_URL.length > 0
+        ? env.SPLITS_API_URL
+        : undefined);
+
     const { data: org } = await httpRequest<{
       data: { orgId: string; orgName: string | null };
     }>(env, "/auth/whoami", {
       requireAuth: true,
-      credentials: {
-        apiKey: value,
-        apiUrl: options.apiUrl ?? env.SPLITS_API_URL ?? DEFAULT_API_URL,
-      },
+      credentials: { apiKey: value, apiUrl: apiUrl ?? DEFAULT_API_URL },
     });
 
     const { alias, replaced } = await saveWorkspace({
@@ -354,7 +360,7 @@ auth.command("login", {
       orgId: org.orgId,
       orgName: org.orgName,
       apiKey: value,
-      apiUrl: options.apiUrl,
+      apiUrl,
     });
 
     if (env.SPLITS_API_KEY !== undefined && env.SPLITS_API_KEY.length > 0) {
@@ -370,7 +376,7 @@ auth.command("login", {
       replaced,
       orgId: org.orgId,
       orgName: org.orgName,
-      apiUrl: options.apiUrl ?? null,
+      apiUrl: apiUrl ?? null,
       path: CONFIG_FILE_PATH,
     };
   },

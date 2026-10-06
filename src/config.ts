@@ -352,17 +352,27 @@ const slugify = (orgName: string | null): string => {
   return slug.length > 0 ? slug : V1_WORKSPACE_ALIAS;
 };
 
-// A login without --name reuses the alias already saved for the same org (or
-// the same key, for a workspace migrated from v1 without an org), so logging
-// in again refreshes it instead of adding a duplicate. Another org with the
-// same name gets a numbered alias so it never replaces a workspace the user
-// did not name.
+// A login without --name reuses the alias already saved for the same org on
+// the same API URL (or the same key, for a workspace migrated from v1 without
+// an org), so logging in again refreshes it instead of adding a duplicate.
+// The URL is part of the match because a local or staging database can be a
+// copy of production with the same org ids. Anything else gets a new alias,
+// numbered on a name clash, so it never replaces a workspace the user did
+// not name.
 const deriveAlias = (
   config: Config,
-  login: { orgId: string; orgName: string | null; apiKey: string },
+  login: {
+    orgId: string;
+    orgName: string | null;
+    apiKey: string;
+    apiUrl?: string;
+  },
 ): string => {
+  const apiUrl = login.apiUrl ?? null;
   const existing = Object.entries(config.workspaces).find(
-    ([, w]) => w.orgId === login.orgId || w.apiKey === login.apiKey,
+    ([, w]) =>
+      (w.orgId === login.orgId && w.apiUrl === apiUrl) ||
+      w.apiKey === login.apiKey,
   );
   if (existing) return existing[0];
 

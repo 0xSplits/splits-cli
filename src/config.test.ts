@@ -211,6 +211,23 @@ describe("auth login", () => {
     assert.deepEqual(result, { alias: "acme-2", replaced: false });
   });
 
+  it("adds a workspace for the same org on another API URL", async () => {
+    await login({ orgId: "org-1", orgName: "Acme", apiKey: "sk_prod" });
+
+    const result = await login({
+      orgId: "org-1",
+      orgName: "Acme",
+      apiKey: "sk_local",
+      apiUrl: "http://localhost:8080",
+    });
+
+    assert.deepEqual(result, { alias: "acme-2", replaced: false });
+    assert.equal(
+      (await config.resolveCredentials({ workspace: "acme" })).apiKey?.value,
+      "sk_prod",
+    );
+  });
+
   it("keeps every other workspace and key", async () => {
     await config.saveKey(KEY_A);
     await login({ orgId: "org-1", orgName: "Acme", apiKey: "sk_1" });
