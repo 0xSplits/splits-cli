@@ -6,8 +6,6 @@ import { beforeEach, describe, it } from "node:test";
 
 import { z } from "incur";
 
-// config.ts reads the home directory when it loads, so HOME points at a
-// scratch directory before the import.
 const home = await fs.mkdtemp(join(tmpdir(), "splits-cli-config-"));
 process.env.HOME = home;
 const config = await import("./config.js");
@@ -428,12 +426,9 @@ describe("file safety", () => {
   });
 });
 
-// ----- helpers -----
-
 const OLDER_CLI_GUARD =
   "This file is in the v2 format. Upgrade @splits/splits-cli to read it.";
 
-// The config schema of @splits/splits-cli 0.2.11, the last release before v2.
 const PUBLISHED_V1_SCHEMA = z.object({
   apiKey: z.object({ value: z.string().min(1), savedAt: z.string() }).optional(),
   apiUrl: z.string().url().optional(),

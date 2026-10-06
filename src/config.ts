@@ -16,13 +16,8 @@ const CONFIG_PATH = join(CONFIG_DIR, "config.json");
 const GITIGNORE_PATH = join(CONFIG_DIR, ".gitignore");
 const LOCK_PATH = join(CONFIG_DIR, "config.json.lock");
 
-// A config change is a read, a small edit and a rename, so a lock older than
-// this belongs to a process that died while holding it.
 const STALE_LOCK_MS = 10_000;
-// Starting point with no data yet: short enough that parallel MCP tool calls
-// barely wait. Raise it if lock waits show up in traces.
 const LOCK_RETRY_MS = 25;
-// Twice the stale age, so a waiter always outlives a dead holder's lock.
 const LOCK_TIMEOUT_MS = 2 * STALE_LOCK_MS;
 
 export const CONFIG_FILE_PATH = CONFIG_PATH;
@@ -31,16 +26,10 @@ export const DEFAULT_API_URL = "https://server.production.splits.org";
 const HEX_ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
 const HEX_PRIVATE_KEY_RE = /^0x[0-9a-f]{64}$/i;
 
-// Aliases are typed on the command line and in env vars, so they stay to
-// characters no shell needs quoted.
 const WORKSPACE_ALIAS_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
-// A v1 file has one API key and no org, so its workspace gets this alias.
 const V1_WORKSPACE_ALIAS = "default";
 
-// CLI versions up to 0.2.11 strip unknown fields, so they would read a v2 file
-// as empty and their next write would erase every workspace and private key.
-// A string where they expect a `key` object makes them refuse the file instead.
 const OLDER_CLI_GUARD =
   "This file is in the v2 format. Upgrade @splits/splits-cli to read it.";
 
@@ -64,20 +53,15 @@ const ConfigV1Schema = z.object({
 type ConfigV1 = z.infer<typeof ConfigV1Schema>;
 
 const WorkspaceSchema = z.object({
-  // Null only for a workspace migrated from a v1 file, which never stored the
-  // org. The next `auth login` into that alias fills them in.
   orgId: z.string().nullable(),
   orgName: z.string().nullable(),
   apiKey: z.string().min(1),
-  // Null means the production API, or SPLITS_API_URL when that is set.
   apiUrl: z.string().url().nullable(),
   savedAt: z.string(),
 });
 
 const ConfigV2Schema = z.object({
   version: z.literal(2),
-  // Null when no workspace is saved, or after the active one is logged out
-  // while several others remain.
   activeWorkspace: z.string().nullable(),
   workspaces: z.record(z.string().regex(WORKSPACE_ALIAS_RE), WorkspaceSchema),
   keys: z.record(
@@ -130,8 +114,6 @@ const invalidShape = (issues: { path: PropertyKey[] }[]): Error => {
   );
 };
 
-// Reads never rewrite the file. A v1 file is returned as v2 in memory and only
-// reaches disk as v2 on the next write.
 const readConfig = async (): Promise<Config> => {
   let raw: string;
   try {
@@ -239,8 +221,6 @@ const writeConfig = async (config: Config): Promise<void> => {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// Takes the cross-process lock: the file exists only while one process edits
-// the config. O_EXCL makes the create fail when another process holds it.
 const acquireLock = async (): Promise<void> => {
   const deadline = Date.now() + LOCK_TIMEOUT_MS;
   for (;;) {
@@ -276,11 +256,6 @@ const acquireLock = async (): Promise<void> => {
   }
 };
 
-// Every change is a read-modify-write, so two changes at once would each
-// write their own copy and lose the other's edit. The queue orders changes
-// inside one process (an MCP server runs tool calls concurrently), and the
-// lock file orders them across processes. A change that leaves the config
-// as it was writes nothing, so a v1 file is only rewritten by a real change.
 let changeQueue: Promise<unknown> = Promise.resolve();
 
 const updateConfig = <T>(change: (config: Config) => T): Promise<T> => {
@@ -352,13 +327,6 @@ const slugify = (orgName: string | null): string => {
   return slug.length > 0 ? slug : V1_WORKSPACE_ALIAS;
 };
 
-// A login without --name reuses the alias already saved for the same org on
-// the same API URL (or the same key, for a workspace migrated from v1 without
-// an org), so logging in again refreshes it instead of adding a duplicate.
-// The URL is part of the match because a local or staging database can be a
-// copy of production with the same org ids. Anything else gets a new alias,
-// numbered on a name clash, so it never replaces a workspace the user did
-// not name.
 const deriveAlias = (
   config: Config,
   login: {
@@ -421,9 +389,6 @@ export const useWorkspace = (alias: string): Promise<WorkspaceInfo> =>
     return toWorkspaceInfo(config, alias, workspace);
   });
 
-// The org is saved at login and can be renamed on the server later, and a
-// workspace migrated from v1 has no org at all. `auth whoami` already fetches
-// the org, so it passes it here to keep the saved copy current.
 export const refreshWorkspaceOrg = (
   alias: string,
   org: { orgId: string; orgName: string | null },
@@ -435,8 +400,6 @@ export const refreshWorkspaceOrg = (
     workspace.orgName = org.orgName;
   });
 
-// Logging out the active workspace hands "active" to the only one left, if
-// exactly one is left. With several left, the user picks with `auth use`.
 export const removeWorkspace = (
   alias?: string,
 ): Promise<{ removed: string | null; activeWorkspace: string | null }> =>
@@ -455,8 +418,6 @@ export const removeWorkspace = (
     return { removed: target, activeWorkspace: config.activeWorkspace };
   });
 
-// Where a command's credentials come from. `workspace` is the --workspace
-// flag; it beats SPLITS_WORKSPACE, which beats the active workspace.
 export type CredentialSource = {
   SPLITS_API_KEY?: string;
   SPLITS_API_URL?: string;
@@ -473,9 +434,6 @@ export type ResolvedCredentials = {
 const nonEmpty = (value: string | undefined): string | undefined =>
   value !== undefined && value.length > 0 ? value : undefined;
 
-// SPLITS_API_KEY wins over every workspace, as it did over the single saved
-// key in v1. The URL still falls back to the selected workspace's override,
-// which is also what v1 did with its one saved URL.
 export const resolveCredentials = async (
   source: CredentialSource,
 ): Promise<ResolvedCredentials> => {
@@ -521,8 +479,6 @@ const findKeyAddress = (config: Config, address: string): string | undefined =>
     (a) => a.toLowerCase() === address.toLowerCase(),
   );
 
-// Returns false when the address is already saved. The saved entry is kept
-// as it is, because the same address always means the same private key.
 export const saveKey = (key: SavedKey): Promise<{ added: boolean }> =>
   updateConfig((config) => {
     if (findKeyAddress(config, key.address) !== undefined) {
@@ -540,8 +496,6 @@ export const listKeys = async (): Promise<PublicKeyInfo[]> => {
   }));
 };
 
-// With no address, picks the only saved key. Several keys need an address so
-// the CLI never signs or deletes with a key the caller did not mean.
 const selectKeyAddress = (
   config: Config,
   address: string | undefined,

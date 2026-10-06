@@ -50,8 +50,6 @@ type HttpOptions = {
   method?: "GET" | "PUT" | "POST" | "DELETE";
   body?: Record<string, unknown>;
   requireAuth: boolean;
-  // `auth login` checks a key before it is saved, so it passes the key and
-  // URL directly instead of resolving them through the config.
   credentials?: { apiKey: string; apiUrl: string };
 };
 

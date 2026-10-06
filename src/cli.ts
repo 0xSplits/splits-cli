@@ -69,8 +69,6 @@ const authEnv = z.object({
     ),
 });
 
-// incur has no global flags, so every authenticated command declares
-// --workspace itself and folds it into its credential source.
 const workspaceOption = z.object({
   workspace: z
     .string()
@@ -273,8 +271,6 @@ auth.command("whoami", {
           orgName: response.data.orgName,
         });
       } catch {
-        // A config that cannot be written (lock held, read-only home) must not
-        // fail whoami. The saved org stays as it was until the next whoami.
       }
     }
 
@@ -361,8 +357,6 @@ auth.command("login", {
       );
     }
 
-    // The workspace keeps the URL the key was checked against, so a key
-    // checked against SPLITS_API_URL still goes there once the env is unset.
     const apiUrl =
       options.apiUrl ??
       (env.SPLITS_API_URL !== undefined && env.SPLITS_API_URL.length > 0
