@@ -169,8 +169,13 @@ Each row in the response includes a `direction` field (`inbound` or `outbound`) 
 splits accounts list
 splits accounts list --includeArchived
 
-# Get account details
+# Get account details, including auto-earn state per chain
 splits accounts get <address>
+
+# Get token balances. Earn rows carry an `earn` object with the underlying
+# asset amount and follow their asset; `assetTotals` sums each asset with its
+# Earn positions. The address is auto-selected if the org has one account.
+splits accounts balances [address] --chainIds 8453,1
 
 # List signers (passkeys + EOAs) and threshold for a subaccount
 splits accounts signers <address>
