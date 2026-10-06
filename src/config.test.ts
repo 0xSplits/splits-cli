@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, it } from "node:test";
 
+import { z } from "incur";
+
 // config.ts reads the home directory when it loads, so HOME points at a
 // scratch directory before the import.
 const home = await fs.mkdtemp(join(tmpdir(), "splits-cli-config-"));
@@ -11,6 +13,7 @@ process.env.HOME = home;
 const config = await import("./config.js");
 
 const CONFIG_PATH = join(home, ".splits", "config.json");
+const LOCK_PATH = join(home, ".splits", "config.json.lock");
 
 describe("config v1 files", () => {
   beforeEach(resetConfig);
@@ -56,6 +59,7 @@ describe("config v1 files", () => {
 
     assert.deepEqual(await readFile(), {
       version: 2,
+      key: OLDER_CLI_GUARD,
       activeWorkspace: "default",
       workspaces: {
         default: {
@@ -71,6 +75,14 @@ describe("config v1 files", () => {
         [KEY_B.address]: { name: KEY_B.name, privateKey: KEY_B.privateKey },
       },
     });
+  });
+
+  it("writes a v2 file that a CLI from before v2 refuses to read", async () => {
+    await config.saveKey(KEY_A);
+
+    const result = PUBLISHED_V1_SCHEMA.safeParse(await readFile());
+
+    assert.equal(result.success, false);
   });
 
   it("refuses a file from a newer config version", async () => {
@@ -302,6 +314,36 @@ describe("local keys", () => {
   });
 });
 
+describe("concurrent changes", () => {
+  beforeEach(resetConfig);
+
+  it("keeps every key when several are saved at once", async () => {
+    await Promise.all([config.saveKey(KEY_A), config.saveKey(KEY_B)]);
+
+    assert.equal((await config.listKeys()).length, 2);
+  });
+
+  it("waits for another process that holds the lock", async () => {
+    await fs.writeFile(LOCK_PATH, "");
+    setTimeout(() => void fs.rm(LOCK_PATH, { force: true }), 100);
+
+    await config.saveKey(KEY_A);
+
+    assert.equal((await config.listKeys()).length, 1);
+  });
+
+  it("takes over a lock left by a process that died", async () => {
+    await fs.writeFile(LOCK_PATH, "");
+    const longAgo = new Date(Date.now() - 60_000);
+    await fs.utimes(LOCK_PATH, longAgo, longAgo);
+
+    await config.saveKey(KEY_A);
+
+    assert.equal((await config.listKeys()).length, 1);
+    await assert.rejects(fs.stat(LOCK_PATH), { code: "ENOENT" });
+  });
+});
+
 describe("file safety", () => {
   beforeEach(resetConfig);
 
@@ -323,6 +365,22 @@ describe("file safety", () => {
 });
 
 // ----- helpers -----
+
+const OLDER_CLI_GUARD =
+  "This file is in the v2 format. Upgrade @splits/splits-cli to read it.";
+
+// The config schema of @splits/splits-cli 0.2.11, the last release before v2.
+const PUBLISHED_V1_SCHEMA = z.object({
+  apiKey: z.object({ value: z.string().min(1), savedAt: z.string() }).optional(),
+  apiUrl: z.string().url().optional(),
+  key: z
+    .object({
+      name: z.string().min(1),
+      address: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
+      privateKey: z.string().regex(/^0x[0-9a-f]{64}$/i),
+    })
+    .optional(),
+});
 
 const KEY_A = {
   name: "ops",

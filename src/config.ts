@@ -4,6 +4,7 @@
 // signing keys. Keys are not tied to a workspace: one EOA can sign for several
 // orgs.
 
+import { randomUUID } from "node:crypto";
 import { constants as fsConstants, promises as fs } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -13,6 +14,16 @@ import { z } from "incur";
 const CONFIG_DIR = join(homedir(), ".splits");
 const CONFIG_PATH = join(CONFIG_DIR, "config.json");
 const GITIGNORE_PATH = join(CONFIG_DIR, ".gitignore");
+const LOCK_PATH = join(CONFIG_DIR, "config.json.lock");
+
+// A config change is a read, a small edit and a rename, so a lock older than
+// this belongs to a process that died while holding it.
+const STALE_LOCK_MS = 10_000;
+// Starting point with no data yet: short enough that parallel MCP tool calls
+// barely wait. Raise it if lock waits show up in traces.
+const LOCK_RETRY_MS = 25;
+// Twice the stale age, so a waiter always outlives a dead holder's lock.
+const LOCK_TIMEOUT_MS = 2 * STALE_LOCK_MS;
 
 export const CONFIG_FILE_PATH = CONFIG_PATH;
 export const DEFAULT_API_URL = "https://server.production.splits.org";
@@ -26,6 +37,12 @@ const WORKSPACE_ALIAS_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
 // A v1 file has one API key and no org, so its workspace gets this alias.
 const V1_WORKSPACE_ALIAS = "default";
+
+// CLI versions up to 0.2.11 strip unknown fields, so they would read a v2 file
+// as empty and their next write would erase every workspace and private key.
+// A string where they expect a `key` object makes them refuse the file instead.
+const OLDER_CLI_GUARD =
+  "This file is in the v2 format. Upgrade @splits/splits-cli to read it.";
 
 const ConfigV1Schema = z.object({
   apiKey: z
@@ -200,7 +217,7 @@ const writeConfig = async (config: Config): Promise<void> => {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
   }
 
-  const tmp = `${CONFIG_PATH}.tmp.${process.pid}`;
+  const tmp = `${CONFIG_PATH}.tmp.${process.pid}.${randomUUID()}`;
   const handle = await fs.open(
     tmp,
     fsConstants.O_WRONLY |
@@ -210,12 +227,79 @@ const writeConfig = async (config: Config): Promise<void> => {
     0o600,
   );
   try {
-    await handle.writeFile(JSON.stringify(config, null, 2) + "\n");
+    await handle.writeFile(
+      JSON.stringify({ ...config, key: OLDER_CLI_GUARD }, null, 2) + "\n",
+    );
     await handle.chmod(0o600);
   } finally {
     await handle.close();
   }
   await fs.rename(tmp, CONFIG_PATH);
+};
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Takes the cross-process lock: the file exists only while one process edits
+// the config. O_EXCL makes the create fail when another process holds it.
+const acquireLock = async (): Promise<void> => {
+  const deadline = Date.now() + LOCK_TIMEOUT_MS;
+  for (;;) {
+    try {
+      const handle = await fs.open(
+        LOCK_PATH,
+        fsConstants.O_WRONLY |
+          fsConstants.O_CREAT |
+          fsConstants.O_EXCL |
+          fsConstants.O_NOFOLLOW,
+        0o600,
+      );
+      await handle.close();
+      return;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+    }
+    const age = await fs
+      .lstat(LOCK_PATH)
+      .then((st) => Date.now() - st.mtimeMs)
+      .catch(() => 0);
+    if (age > STALE_LOCK_MS) {
+      await fs.rm(LOCK_PATH, { force: true });
+      continue;
+    }
+    if (Date.now() > deadline) {
+      throw new Error(
+        `Config at ${CONFIG_PATH} is locked by another splits process (${LOCK_PATH}). ` +
+          `Try again, or delete the lock file if no splits process is running.`,
+      );
+    }
+    await sleep(LOCK_RETRY_MS);
+  }
+};
+
+// Every change is a read-modify-write, so two changes at once would each
+// write their own copy and lose the other's edit. The queue orders changes
+// inside one process (an MCP server runs tool calls concurrently), and the
+// lock file orders them across processes. A change that leaves the config
+// as it was writes nothing, so a v1 file is only rewritten by a real change.
+let changeQueue: Promise<unknown> = Promise.resolve();
+
+const updateConfig = <T>(change: (config: Config) => T): Promise<T> => {
+  const run = async (): Promise<T> => {
+    await ensureDir();
+    await acquireLock();
+    try {
+      const config = await readConfig();
+      const before = JSON.stringify(config);
+      const result = change(config);
+      if (JSON.stringify(config) !== before) await writeConfig(config);
+      return result;
+    } finally {
+      await fs.rm(LOCK_PATH, { force: true });
+    }
+  };
+  const next = changeQueue.then(run, run);
+  changeQueue = next.catch(() => undefined);
+  return next;
 };
 
 // ----- Workspaces -----
@@ -297,19 +381,19 @@ export const saveWorkspace = async (input: {
   apiUrl?: string;
 }): Promise<{ alias: string; replaced: boolean }> => {
   if (input.name !== undefined) assertWorkspaceAlias(input.name);
-  const config = await readConfig();
-  const alias = input.name ?? deriveAlias(config, input);
-  const replaced = alias in config.workspaces;
-  config.workspaces[alias] = {
-    orgId: input.orgId,
-    orgName: input.orgName,
-    apiKey: input.apiKey,
-    apiUrl: input.apiUrl ?? null,
-    savedAt: new Date().toISOString(),
-  };
-  config.activeWorkspace = alias;
-  await writeConfig(config);
-  return { alias, replaced };
+  return updateConfig((config) => {
+    const alias = input.name ?? deriveAlias(config, input);
+    const replaced = alias in config.workspaces;
+    config.workspaces[alias] = {
+      orgId: input.orgId,
+      orgName: input.orgName,
+      apiKey: input.apiKey,
+      apiUrl: input.apiUrl ?? null,
+      savedAt: new Date().toISOString(),
+    };
+    config.activeWorkspace = alias;
+    return { alias, replaced };
+  });
 };
 
 export const listWorkspaces = async (): Promise<WorkspaceInfo[]> => {
@@ -319,35 +403,33 @@ export const listWorkspaces = async (): Promise<WorkspaceInfo[]> => {
   );
 };
 
-export const useWorkspace = async (alias: string): Promise<WorkspaceInfo> => {
-  const config = await readConfig();
-  const workspace = config.workspaces[alias];
-  if (!workspace) throw unknownWorkspace(config, alias);
-  config.activeWorkspace = alias;
-  await writeConfig(config);
-  return toWorkspaceInfo(config, alias, workspace);
-};
+export const useWorkspace = (alias: string): Promise<WorkspaceInfo> =>
+  updateConfig((config) => {
+    const workspace = config.workspaces[alias];
+    if (!workspace) throw unknownWorkspace(config, alias);
+    config.activeWorkspace = alias;
+    return toWorkspaceInfo(config, alias, workspace);
+  });
 
 // Logging out the active workspace hands "active" to the only one left, if
 // exactly one is left. With several left, the user picks with `auth use`.
-export const removeWorkspace = async (
+export const removeWorkspace = (
   alias?: string,
-): Promise<{ removed: string | null; activeWorkspace: string | null }> => {
-  const config = await readConfig();
-  const target = alias ?? config.activeWorkspace;
-  if (target === null) {
-    return { removed: null, activeWorkspace: config.activeWorkspace };
-  }
-  if (!(target in config.workspaces)) throw unknownWorkspace(config, target);
+): Promise<{ removed: string | null; activeWorkspace: string | null }> =>
+  updateConfig((config) => {
+    const target = alias ?? config.activeWorkspace;
+    if (target === null) {
+      return { removed: null, activeWorkspace: config.activeWorkspace };
+    }
+    if (!(target in config.workspaces)) throw unknownWorkspace(config, target);
 
-  delete config.workspaces[target];
-  if (config.activeWorkspace === target) {
-    const remaining = Object.keys(config.workspaces);
-    config.activeWorkspace = remaining.length === 1 ? remaining[0] : null;
-  }
-  await writeConfig(config);
-  return { removed: target, activeWorkspace: config.activeWorkspace };
-};
+    delete config.workspaces[target];
+    if (config.activeWorkspace === target) {
+      const remaining = Object.keys(config.workspaces);
+      config.activeWorkspace = remaining.length === 1 ? remaining[0] : null;
+    }
+    return { removed: target, activeWorkspace: config.activeWorkspace };
+  });
 
 // Where a command's credentials come from. `workspace` is the --workspace
 // flag; it beats SPLITS_WORKSPACE, which beats the active workspace.
@@ -417,15 +499,14 @@ const findKeyAddress = (config: Config, address: string): string | undefined =>
 
 // Returns false when the address is already saved. The saved entry is kept
 // as it is, because the same address always means the same private key.
-export const saveKey = async (key: SavedKey): Promise<{ added: boolean }> => {
-  const config = await readConfig();
-  if (findKeyAddress(config, key.address) !== undefined) {
-    return { added: false };
-  }
-  config.keys[key.address] = { name: key.name, privateKey: key.privateKey };
-  await writeConfig(config);
-  return { added: true };
-};
+export const saveKey = (key: SavedKey): Promise<{ added: boolean }> =>
+  updateConfig((config) => {
+    if (findKeyAddress(config, key.address) !== undefined) {
+      return { added: false };
+    }
+    config.keys[key.address] = { name: key.name, privateKey: key.privateKey };
+    return { added: true };
+  });
 
 export const listKeys = async (): Promise<PublicKeyInfo[]> => {
   const config = await readConfig();
@@ -461,16 +542,15 @@ const selectKeyAddress = (
   return addresses[0];
 };
 
-export const removeKey = async (
+export const removeKey = (
   address?: string,
-): Promise<{ previousAddress: `0x${string}` | null }> => {
-  const config = await readConfig();
-  const match = selectKeyAddress(config, address, "<address>");
-  if (match === null) return { previousAddress: null };
-  delete config.keys[match];
-  await writeConfig(config);
-  return { previousAddress: match as `0x${string}` };
-};
+): Promise<{ previousAddress: `0x${string}` | null }> =>
+  updateConfig((config) => {
+    const match = selectKeyAddress(config, address, "<address>");
+    if (match === null) return { previousAddress: null };
+    delete config.keys[match];
+    return { previousAddress: match as `0x${string}` };
+  });
 
 export const loadLocalKey = async (address?: string): Promise<SavedKey | null> => {
   const config = await readConfig();
