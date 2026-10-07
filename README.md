@@ -133,6 +133,13 @@ splits transactions properties set <id> --property invoice=ETHGLOBAL-42
 # Replace or clear all custom metadata
 splits transactions properties replace <id> --properties '{"userId":420}'
 splits transactions properties clear <id>
+
+# Propose an Earn deposit or withdrawal (amount is in asset units, e.g. USDC)
+splits transactions create earn-deposit --account 0x... --chain-id 8453 \
+  --asset 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 --amount 100
+splits transactions create earn-withdraw --account 0x... --chain-id 8453 \
+  --asset 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 --amount 25 \
+  --pause-auto-earn-seconds 3600
 ```
 
 For multisig transactions, gas can only be refreshed when exactly one signer remains. `transactions sign` requires a local EOA (see "Local signing key" above) and that the address is already an authorized signer on the transaction's smart account.
