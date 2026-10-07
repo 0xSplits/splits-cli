@@ -727,92 +727,9 @@ accounts.command("get", {
   },
 });
 
-type BalanceRow = {
-  address: string;
-  chainId: number;
-  symbol: string | null;
-  decimals: number;
-  amount: string;
-  usdValue: number;
-  earn?: {
-    vaultAddress: string;
-    assetAddress: string;
-    assetSymbol: string;
-    assetDecimals: number;
-    assetAmount: string;
-    legacy: boolean;
-  };
-};
-
-type AssetTotal = {
-  chainId: number;
-  address: string;
-  symbol: string | null;
-  decimals: number;
-  amount: string;
-  usdValue: number;
-};
-
-const assetKey = (chainId: number, address: string) =>
-  `${chainId}:${address.toLowerCase()}`;
-
-const groupEarnBalances = (rows: BalanceRow[]) => {
-  const earnRowsByAsset = new Map<string, BalanceRow[]>();
-  rows
-    .filter((row) => row.earn)
-    .forEach((row) => {
-      const key = assetKey(row.chainId, row.earn!.assetAddress);
-      earnRowsByAsset.set(key, [...(earnRowsByAsset.get(key) ?? []), row]);
-    });
-
-  const assetRowsByAsset = new Map(
-    rows
-      .filter((row) => !row.earn)
-      .map((row) => [assetKey(row.chainId, row.address), row]),
-  );
-
-  const orphanEarnRows = [...earnRowsByAsset.entries()]
-    .filter(([key]) => !assetRowsByAsset.has(key))
-    .flatMap(([, earnRows]) => earnRows);
-  const data = [
-    ...rows
-      .filter((row) => !row.earn)
-      .flatMap((row) => [
-        row,
-        ...(earnRowsByAsset.get(assetKey(row.chainId, row.address)) ?? []),
-      ]),
-    ...orphanEarnRows,
-  ];
-
-  const assetTotals: AssetTotal[] = [...earnRowsByAsset.entries()].map(
-    ([key, earnRows]) => {
-      const assetRow = assetRowsByAsset.get(key);
-      const { earn, chainId } = earnRows[0];
-      return {
-        chainId,
-        address: assetRow?.address ?? earn!.assetAddress,
-        symbol: assetRow?.symbol ?? earn!.assetSymbol,
-        decimals: assetRow?.decimals ?? earn!.assetDecimals,
-        amount: earnRows
-          .reduce(
-            (sum, row) => sum + BigInt(row.earn!.assetAmount),
-            BigInt(assetRow?.amount ?? 0),
-          )
-          .toString(),
-        usdValue: earnRows.reduce(
-          (sum, row) => sum + row.usdValue,
-          assetRow?.usdValue ?? 0,
-        ),
-      };
-    },
-  );
-
-  return { data, assetTotals };
-};
-
 accounts.command("balances", {
   description:
-    "Get token balances for an account. Earn rows follow their underlying asset, and assetTotals sums each asset with its Earn positions.",
+    "Get token balances for an account. Earn vault rows include an earn object with the underlying asset and the amount the shares redeem for.",
   env: authEnv,
   args: z.object({
     address: evmAddress
@@ -842,11 +759,10 @@ accounts.command("balances", {
         );
       }
     }
-    const result = await apiRequest<{ data: BalanceRow[] }>(
+    return apiRequest(
       env,
       `/org/accounts/${address}/balances${buildQuery({ chainIds: options.chainIds })}`,
     );
-    return groupEarnBalances(result.data);
   },
 });
 
