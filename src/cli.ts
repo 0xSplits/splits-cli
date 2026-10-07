@@ -2040,7 +2040,9 @@ create.command("transfer", {
     token: z
       .string()
       .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid token address")
-      .describe("The token contract address to transfer"),
+      .describe(
+        "The token the recipient receives. An Earn token address sends the Earn position itself and is allowed only to accounts in this workspace. To pay a recipient from Earn, pass the underlying asset (e.g. USDC) here and the Earn token as --from-earn-vault-token",
+      ),
     amount: z
       .string()
       .regex(
@@ -2049,6 +2051,19 @@ create.command("transfer", {
       )
       .describe(
         "The amount to transfer in human-readable units (e.g., '100' for 100 USDC, '0.5' for 0.5 ETH)",
+      ),
+    fromEarnVaultToken: z
+      .string()
+      .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid token address")
+      .optional()
+      .describe(
+        "Optional Earn token to pay from. Withdraws the amount of the underlying asset from this Earn position and transfers it to the recipient. --token must be the Earn token's underlying asset",
+      ),
+    pauseAutoEarnSeconds: z
+      .union([z.literal(300), z.literal(3600), z.literal(86400)])
+      .optional()
+      .describe(
+        "Optional. Pauses auto-earn on the account for 300, 3600, or 86400 seconds so the withdrawn funds are not deposited again. Only with --from-earn-vault-token",
       ),
     memo: z
       .string()
@@ -2094,6 +2109,12 @@ create.command("transfer", {
       recipient: options.recipient,
       token: options.token,
       amount: options.amount,
+      ...(options.fromEarnVaultToken !== undefined && {
+        fromEarnVaultToken: options.fromEarnVaultToken,
+      }),
+      ...(options.pauseAutoEarnSeconds !== undefined && {
+        pauseAutoEarnSeconds: options.pauseAutoEarnSeconds,
+      }),
       ...(options.memo !== undefined && { memo: options.memo }),
       ...(properties !== undefined && { properties }),
       ...(options.name !== undefined && { name: options.name }),
