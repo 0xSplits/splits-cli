@@ -1001,8 +1001,6 @@ const accounting = Cli.create("accounting", {
   description: "Tax lots, lot assertions, accounting reports, imports, and lot recomputes",
 });
 
-const AUTO_EARN_PAUSE_SECONDS = [300, 3600, 86400];
-
 const REPORT_NAMES = [
   "transactions",
   "lots",
@@ -2221,16 +2219,6 @@ create.command("transfer", {
       .describe(
         "Optional Earn token to pay from. Withdraws the amount of the underlying asset from this Earn position and transfers it to the recipient. --token must be the Earn token's underlying asset",
       ),
-    pauseAutoEarnSeconds: z
-      .number()
-      .refine(
-        (seconds) => AUTO_EARN_PAUSE_SECONDS.includes(seconds),
-        `Must be one of ${AUTO_EARN_PAUSE_SECONDS.join(", ")}`,
-      )
-      .optional()
-      .describe(
-        "Optional. Pauses auto-earn on the account for 300, 3600, or 86400 seconds so the withdrawn funds are not deposited again. Only with --from-earn-vault-token",
-      ),
     memo: z
       .string()
       .max(500)
@@ -2278,9 +2266,6 @@ create.command("transfer", {
       amount: options.amount,
       ...(options.fromEarnVaultToken !== undefined && {
         fromEarnVaultToken: options.fromEarnVaultToken,
-      }),
-      ...(options.pauseAutoEarnSeconds !== undefined && {
-        pauseAutoEarnSeconds: options.pauseAutoEarnSeconds,
       }),
       ...(options.memo !== undefined && { memo: options.memo }),
       ...(properties !== undefined && { properties }),
