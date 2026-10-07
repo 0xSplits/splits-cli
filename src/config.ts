@@ -344,11 +344,12 @@ export const useWorkspace = (alias: string): Promise<WorkspaceInfo> =>
 
 export const refreshWorkspaceOrg = (
   alias: string,
+  apiKey: string,
   org: { orgId: string; orgName: string | null },
 ): Promise<void> =>
   updateConfig((config) => {
     const workspace = config.workspaces[alias];
-    if (!workspace) return;
+    if (workspace?.apiKey !== apiKey) return;
     workspace.orgId = org.orgId;
     workspace.orgName = org.orgName;
   });
@@ -379,7 +380,8 @@ export type CredentialSource = {
 };
 
 export type ResolvedCredentials = {
-  apiKey: { value: string; source: "env" | "keystore" } | null;
+  apiKey: string | null;
+  apiKeySource: "env" | "keystore" | null;
   apiUrl: string;
   workspace: string | null;
 };
@@ -390,24 +392,34 @@ const nonEmpty = (value: string | undefined): string | undefined =>
 export const resolveCredentials = async (
   source: CredentialSource,
 ): Promise<ResolvedCredentials> => {
-  const config = await readConfig();
   const requested =
     nonEmpty(source.workspace) ?? nonEmpty(source.SPLITS_WORKSPACE);
+  const envKey = nonEmpty(source.SPLITS_API_KEY);
+  if (envKey !== undefined) {
+    if (requested !== undefined) {
+      throw new Error(
+        `SPLITS_API_KEY is set, so workspace "${requested}" cannot be used. ` +
+          `Unset SPLITS_API_KEY to use a saved workspace, or drop --workspace and SPLITS_WORKSPACE.`,
+      );
+    }
+    return {
+      apiKey: envKey,
+      apiKeySource: "env",
+      apiUrl: nonEmpty(source.SPLITS_API_URL) ?? DEFAULT_API_URL,
+      workspace: null,
+    };
+  }
+
+  const config = await readConfig();
   if (requested !== undefined && !(requested in config.workspaces)) {
     throw unknownWorkspace(config, requested);
   }
   const alias = requested ?? config.activeWorkspace;
   const workspace = alias !== null ? config.workspaces[alias] : undefined;
 
-  const envKey = nonEmpty(source.SPLITS_API_KEY);
-  const apiKey = envKey
-    ? { value: envKey, source: "env" as const }
-    : workspace
-      ? { value: workspace.apiKey, source: "keystore" as const }
-      : null;
-
   return {
-    apiKey,
+    apiKey: workspace?.apiKey ?? null,
+    apiKeySource: workspace ? "keystore" : null,
     apiUrl:
       nonEmpty(source.SPLITS_API_URL) ?? workspace?.apiUrl ?? DEFAULT_API_URL,
     workspace: workspace ? alias : null,

@@ -9,7 +9,7 @@ import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import {
   assertWorkspaceAlias,
   CONFIG_FILE_PATH,
-  type CredentialSource,
+  type ResolvedCredentials,
   DEFAULT_API_URL,
   defaultKeyName,
   listKeys,
@@ -65,7 +65,7 @@ const authEnv = z.object({
     .optional()
     .describe(
       "Workspace alias from `splits auth workspaces`. Overrides the active workspace; " +
-        "--workspace overrides it. Ignored for the API key when SPLITS_API_KEY is set.",
+        "--workspace overrides it. Cannot be combined with SPLITS_API_KEY.",
     ),
 });
 
@@ -79,12 +79,13 @@ const workspaceOption = z.object({
     ),
 });
 
-type AuthEnv = CredentialSource;
+type AuthEnv = ResolvedCredentials;
 
 const withWorkspace = (
   env: z.infer<typeof authEnv>,
   options: z.infer<typeof workspaceOption>,
-): AuthEnv => ({ ...env, workspace: options.workspace });
+): Promise<AuthEnv> =>
+  resolveCredentials({ ...env, workspace: options.workspace });
 
 // Shortcut: forward to the shared http helper with auth required.
 const apiRequest = <T = unknown>(
@@ -243,15 +244,7 @@ auth.command("whoami", {
   env: authEnv,
   options: workspaceOption,
   async run({ env: processEnv, options }) {
-    const env = withWorkspace(processEnv, options);
-    const resolved = await resolveCredentials(env);
-    if (!resolved.apiKey) {
-      throw new SplitsApiError(
-        "no-api-key",
-        0,
-        "No API key configured. Run `splits auth login`, pick a workspace with `splits auth use`, or export SPLITS_API_KEY.",
-      );
-    }
+    const env = await withWorkspace(processEnv, options);
     const [response, localKeys] = await Promise.all([
       apiRequest<{
         data: { orgId: string; orgName: string | null } & Record<
@@ -262,11 +255,9 @@ auth.command("whoami", {
       listKeys(),
     ]);
 
-    const workspace =
-      resolved.apiKey.source === "env" ? null : resolved.workspace;
-    if (workspace !== null) {
+    if (env.workspace !== null && env.apiKey !== null) {
       try {
-        await refreshWorkspaceOrg(workspace, {
+        await refreshWorkspaceOrg(env.workspace, env.apiKey, {
           orgId: response.data.orgId,
           orgName: response.data.orgName,
         });
@@ -296,8 +287,8 @@ auth.command("whoami", {
       ...response,
       data: {
         ...response.data,
-        workspace,
-        apiKeySource: resolved.apiKey.source,
+        workspace: env.workspace,
+        apiKeySource: env.apiKeySource,
         localKeys: localKeys.map((key) => ({
           ...key,
           signerId: signerIdsByAddress.get(key.address.toLowerCase()) ?? null,
@@ -365,10 +356,11 @@ auth.command("login", {
 
     const { data: org } = await httpRequest<{
       data: { orgId: string; orgName: string | null };
-    }>(env, "/auth/whoami", {
-      requireAuth: true,
-      credentials: { apiKey: value, apiUrl: apiUrl ?? DEFAULT_API_URL },
-    });
+    }>(
+      { apiKey: value, apiUrl: apiUrl ?? DEFAULT_API_URL },
+      "/auth/whoami",
+      { requireAuth: true },
+    );
 
     const { alias, replaced } = await saveWorkspace({
       name: options.name,
@@ -467,7 +459,7 @@ auth.command("create-key", {
       ),
   }),
   async run({ env: processEnv, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     const privateKey = generatePrivateKey();
     const account = privateKeyToAccount(privateKey);
     const name = options.name ?? defaultKeyName(account.address);
@@ -639,7 +631,7 @@ auth.command("register-signer", {
       ),
   }),
   async run({ env: processEnv, args, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     const body = {
       address: args.address,
       ...(options.name !== undefined && { name: options.name }),
@@ -665,7 +657,7 @@ auth.command("signers", {
   env: authEnv,
   options: workspaceOption,
   async run({ env: processEnv, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     return apiRequest<{
       data: Array<{
         id: string;
@@ -714,7 +706,7 @@ accounts.command("list", {
       .describe("Include archived accounts"),
   }),
   async run({ env: processEnv, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(
       env,
       `/org/accounts${buildQuery({ includeArchived: options.includeArchived })}`,
@@ -730,7 +722,7 @@ accounts.command("get", {
     address: evmAddress.describe("Account address (0x...)"),
   }),
   async run({ env: processEnv, args, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, `/org/accounts/${args.address}`);
   },
 });
@@ -752,7 +744,7 @@ accounts.command("balances", {
       .describe("Comma-separated chain IDs to filter (e.g. 1,8453)"),
   }),
   async run({ env: processEnv, args, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     let address = args.address;
     if (!address) {
       const result = await apiRequest<{
@@ -781,7 +773,7 @@ accounts.command("chains", {
     address: evmAddress.describe("Account address (0x...)"),
   }),
   async run({ env: processEnv, args, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, `/org/accounts/${args.address}/chains`);
   },
 });
@@ -796,7 +788,7 @@ accounts.command("signers", {
     address: evmAddress.describe("Account address (0x...)"),
   }),
   async run({ env: processEnv, args, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, `/org/accounts/${args.address}/signers`);
   },
 });
@@ -810,7 +802,7 @@ accounts.command("archive", {
     address: evmAddress.describe("Account address (0x...)"),
   }),
   async run({ env: processEnv, args, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, `/org/accounts/${args.address}/archive`, {
       method: "PUT",
     });
@@ -827,7 +819,7 @@ accounts.command("unarchive", {
     address: evmAddress.describe("Account address (0x...)"),
   }),
   async run({ env: processEnv, args, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, `/org/accounts/${args.address}/unarchive`, {
       method: "PUT",
     });
@@ -850,7 +842,7 @@ accounts.command("rename", {
       .describe("New account name (max 255 chars)"),
   }),
   async run({ env: processEnv, args, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, `/org/accounts/${args.address}/rename`, {
       method: "PUT",
       body: { name: options.name },
@@ -893,7 +885,7 @@ accounts.command("create", {
       .describe("Number of signers required to approve transactions"),
   }),
   async run({ env: processEnv, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     const passkeyIds = splitCsv(options.passkeyIds);
     const eoaSignerIds = splitCsv(options.eoaSignerIds);
     const eoaSigners = splitCsv(options.eoaAddresses).map((address) => ({
@@ -977,7 +969,7 @@ accounts.command("update-signers", {
     memo: z.string().optional().describe("Optional memo (max 500 chars)"),
   }),
   async run({ env: processEnv, args, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     const body = {
       account: args.account,
       addPasskeyIds: splitCsv(options.addPasskeyIds),
@@ -1109,7 +1101,7 @@ reports.command("list", {
   env: authEnv,
   options: workspaceOption,
   async run({ env: processEnv, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, "/accounting/reports");
   },
 });
@@ -1226,7 +1218,7 @@ reports.command("generate", {
       ),
   }),
   async run({ env: processEnv, args, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     const { startDate, endDate } = resolveDateRange(options);
     const fileFormat =
       args.report === "statement" ? "pdf" : options.fileFormat;
@@ -1317,7 +1309,7 @@ reports.command("job", {
     jobId: z.string().describe("Job id returned by 'accounting reports generate'"),
   }),
   async run({ env: processEnv, args, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, `/accounting/reports/jobs/${args.jobId}`);
   },
 });
@@ -1389,7 +1381,7 @@ lots.command("list", {
     sortDirection: z.enum(["asc", "desc"]).optional().describe("Sort direction"),
   }),
   async run({ env: processEnv, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(
       env,
       `/accounting/lots${buildQuery({
@@ -1437,7 +1429,7 @@ lots.command("assertions", {
       .describe("nextCursor from the previous page"),
   }),
   async run({ env: processEnv, args, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(
       env,
       `/accounting/lots/${args.lotId}/assertions${buildQuery({
@@ -1499,7 +1491,7 @@ assertions.command("seed", {
       ),
   }),
   async run({ env: processEnv, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     return writeAssertion(env, {
       kind: "seed",
       smartAccountId: options.smartAccountId,
@@ -1545,7 +1537,7 @@ assertions.command("edit", {
       .describe("Corrected lot this one carries basis from"),
   }),
   async run({ env: processEnv, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     if (!options.unitPrice && !options.acquisitionTime && !options.originLotId) {
       throw new Error(
         "An edit must assert at least one of --unit-price, --acquisition-time, or --origin-lot-id.",
@@ -1590,7 +1582,7 @@ assertions.command("revoke", {
       .describe("Inbound transfer a designation marked"),
   }),
   async run({ env: processEnv, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     const named = [
       options.targetKey,
       options.sourceTransferId,
@@ -1632,7 +1624,7 @@ assertions.command("designate", {
       .describe("Inbound transfer to designate"),
   }),
   async run({ env: processEnv, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     return writeAssertion(env, {
       kind: "designate",
       smartAccountId: options.smartAccountId,
@@ -1656,7 +1648,7 @@ assertions.command("bulk", {
       .describe("Path to a JSON file holding an array of assertions"),
   }),
   async run({ env: processEnv, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     const parsed: unknown = JSON.parse(readFileSync(options.file, "utf8"));
 
     if (!Array.isArray(parsed)) {
@@ -1698,7 +1690,7 @@ imports.command("create", {
       ),
   }),
   async run({ env: processEnv, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     const chainIds = splitCsv(options.chainIds).map((id) => {
       const parsed = Number(id);
       if (!Number.isInteger(parsed) || parsed <= 0) {
@@ -1728,7 +1720,7 @@ imports.command("list", {
   env: authEnv,
   options: workspaceOption,
   async run({ env: processEnv, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, "/accounting/imports");
   },
 });
@@ -1748,7 +1740,7 @@ imports.command("status", {
       .describe("Comma-separated chain ids the import was created with"),
   }),
   async run({ env: processEnv, args, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(
       env,
       `/accounting/imports/${args.smartAccountId}/jobs${buildQuery({
@@ -1771,7 +1763,7 @@ recompute.command("current", {
   env: authEnv,
   options: workspaceOption,
   async run({ env: processEnv, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, "/accounting/recompute");
   },
 });
@@ -1785,7 +1777,7 @@ recompute.command("job", {
     jobId: z.string().describe("Job id from 'accounting recompute current' or 'run'"),
   }),
   async run({ env: processEnv, args, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, `/accounting/recompute/${args.jobId}`);
   },
 });
@@ -1797,7 +1789,7 @@ recompute.command("run", {
   env: authEnv,
   options: workspaceOption,
   async run({ env: processEnv, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, "/accounting/recompute", { method: "PUT" });
   },
 });
@@ -1901,7 +1893,7 @@ transactions.command("list", {
       ),
   }),
   async run({ env: processEnv, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     const { startDate, endDate } = resolveDateRange(options);
 
     return apiRequest(
@@ -1932,7 +1924,7 @@ transactions.command("get", {
     id: transactionId.describe("Transaction ID"),
   }),
   async run({ env: processEnv, args, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, `/transactions/${args.id}`);
   },
 });
@@ -1950,7 +1942,7 @@ transactions.command("memo", {
       .describe("New memo text (max 500 chars). Empty string clears the memo."),
   }),
   async run({ env: processEnv, args, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, `/transactions/${args.id}`, {
       method: "PUT",
       body: { memo: options.memo },
@@ -2069,7 +2061,7 @@ properties.command("set", {
       ),
   }),
   async run({ env: processEnv, args, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     if (
       options.properties === undefined &&
       (!options.property || options.property.length === 0) &&
@@ -2122,7 +2114,7 @@ properties.command("replace", {
       ),
   }),
   async run({ env: processEnv, args, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     if (
       options.properties === undefined &&
       (!options.property || options.property.length === 0)
@@ -2149,7 +2141,7 @@ properties.command("clear", {
     id: transactionId.describe("Transaction ID"),
   }),
   async run({ env: processEnv, args, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, `/transactions/${args.id}`, {
       method: "PUT",
       body: { properties: null },
@@ -2168,7 +2160,7 @@ transactions.command("update-gas-estimation", {
     id: transactionId.describe("Transaction ID"),
   }),
   async run({ env: processEnv, args, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, `/transactions/${args.id}/update_gas_estimation`, {
       method: "PUT",
     });
@@ -2249,7 +2241,7 @@ create.command("transfer", {
       ),
   }),
   async run({ env: processEnv, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     const properties =
       options.properties !== undefined || options.property?.length
         ? applyPropertyOverlays(
@@ -2346,7 +2338,7 @@ create.command("custom", {
       ),
   }),
   async run({ env: processEnv, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     const properties =
       options.properties !== undefined || options.property?.length
         ? applyPropertyOverlays(
@@ -2390,7 +2382,7 @@ transactions.command("cancel", {
       .describe("The proposal ID to cancel"),
   }),
   async run({ env: processEnv, args, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, `/proposals/${args.id}`, {
       method: "DELETE",
     });
@@ -2424,7 +2416,7 @@ transactions.command("sign", {
       ),
   }),
   async run({ env: processEnv, args, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     return signTransactionLocally(env, args.id, {
       submit: !options.noSubmit,
       keyAddress: options.key,
@@ -2453,7 +2445,7 @@ contacts.command("list", {
       .describe("Search term to filter contacts by name, label, or address"),
   }),
   async run({ env: processEnv, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, `/contacts${buildQuery({ q: options.q })}`);
   },
 });
@@ -2467,7 +2459,7 @@ contacts.command("lookup", {
       .describe("Comma-separated Ethereum addresses to look up (max 100)"),
   }),
   async run({ env: processEnv, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(
       env,
       `/contacts/lookup${buildQuery({ addresses: options.addresses })}`,
@@ -2493,7 +2485,7 @@ tokens.command("metadata", {
     chainId: z.number().describe("Chain ID"),
   }),
   async run({ env: processEnv, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(
       env,
       `/tokens/metadata${buildQuery({
@@ -2511,7 +2503,7 @@ tokens.command("whitelist", {
   env: authEnv,
   options: workspaceOption,
   async run({ env: processEnv, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, "/tokens/whitelist");
   },
 });
@@ -2523,7 +2515,7 @@ tokens.command("blocklist", {
   env: authEnv,
   options: workspaceOption,
   async run({ env: processEnv, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, "/tokens/blocklist");
   },
 });
@@ -2543,7 +2535,7 @@ chains.command("list", {
   env: authEnv,
   options: workspaceOption,
   async run({ env: processEnv, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, "/chains");
   },
 });
@@ -2556,7 +2548,7 @@ chains.command("get", {
     chainId: z.number().describe("Chain ID (e.g. 1, 8453)"),
   }),
   async run({ env: processEnv, args, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     const result = await apiRequest<{
       data: Array<{ chainId: number }>;
     }>(env, "/chains");
@@ -2583,7 +2575,7 @@ members.command("list", {
   env: authEnv,
   options: workspaceOption,
   async run({ env: processEnv, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, "/members");
   },
 });
@@ -2601,7 +2593,7 @@ members.command("signers", {
       .describe("Member user ID from 'members list'"),
   }),
   async run({ env: processEnv, args, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, `/members/${args.userId}/signers`);
   },
 });
@@ -2621,7 +2613,7 @@ settings.command("get", {
   env: authEnv,
   options: workspaceOption,
   async run({ env: processEnv, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, "/settings");
   },
 });
@@ -2641,7 +2633,7 @@ automations.command("list", {
   env: authEnv,
   options: workspaceOption,
   async run({ env: processEnv, options }) {
-    const env = withWorkspace(processEnv, options);
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, "/automations");
   },
 });
@@ -2682,7 +2674,7 @@ org.command("create", {
       ),
   }),
   async run({ env, options }) {
-    return httpRequest(env, "/auth/send-create-org-link", {
+    return httpRequest(await resolveCredentials(env), "/auth/send-create-org-link", {
       method: "POST",
       requireAuth: false,
       body: { email: options.email },

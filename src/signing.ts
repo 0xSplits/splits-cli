@@ -4,8 +4,8 @@
 
 import { privateKeyToAccount } from "viem/accounts";
 
-import { type CredentialSource, loadLocalKey } from "./config.js";
-import { httpRequest, SplitsApiError } from "./http.js";
+import { loadLocalKey } from "./config.js";
+import { type Credentials, httpRequest, SplitsApiError } from "./http.js";
 
 export type SignResponse = {
   data: {
@@ -26,7 +26,7 @@ type TxGetResponse = { data: { signingHash?: string | null } };
 const SIGNING_HASH_RE = /^0x[0-9a-f]{64}$/i;
 
 const fetchSigningHash = async (
-  env: CredentialSource,
+  env: Credentials,
   txId: string,
 ): Promise<`0x${string}`> => {
   const tx = await httpRequest<TxGetResponse>(env, `/transactions/${txId}`, {
@@ -57,7 +57,7 @@ export const signHash = (
   privateKeyToAccount(privateKey).signMessage({ message: { raw: hash } });
 
 export async function signTransactionLocally(
-  env: CredentialSource,
+  env: Credentials,
   txId: string,
   opts: { submit: boolean; keyAddress?: string },
 ): Promise<SignResponse> {

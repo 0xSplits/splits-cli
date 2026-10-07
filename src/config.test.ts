@@ -33,7 +33,8 @@ describe("config v1 files", () => {
       { name: "ops", address: KEY_A.address },
     ]);
     assert.deepEqual(await config.resolveCredentials({}), {
-      apiKey: { value: "sk_v1", source: "keystore" },
+      apiKey: "sk_v1",
+      apiKeySource: "keystore",
       apiUrl: "https://staging.example.com",
       workspace: "default",
     });
@@ -104,7 +105,8 @@ describe("credential precedence", () => {
 
   it("uses the active workspace by default", async () => {
     assert.deepEqual(await config.resolveCredentials({}), {
-      apiKey: { value: "sk_pett", source: "keystore" },
+      apiKey: "sk_pett",
+      apiKeySource: "keystore",
       apiUrl: "https://staging.example.com",
       workspace: "pett",
     });
@@ -116,7 +118,7 @@ describe("credential precedence", () => {
     });
 
     assert.equal(resolved.workspace, "acme");
-    assert.equal(resolved.apiKey?.value, "sk_acme");
+    assert.equal(resolved.apiKey, "sk_acme");
     assert.equal(resolved.apiUrl, config.DEFAULT_API_URL);
   });
 
@@ -126,16 +128,42 @@ describe("credential precedence", () => {
       workspace: "acme",
     });
 
-    assert.equal(resolved.apiKey?.value, "sk_acme");
+    assert.equal(resolved.apiKey, "sk_acme");
   });
 
-  it("lets SPLITS_API_KEY win over every workspace", async () => {
+  it("lets SPLITS_API_KEY win over the active workspace, URL included", async () => {
+    assert.deepEqual(
+      await config.resolveCredentials({ SPLITS_API_KEY: "sk_env" }),
+      {
+        apiKey: "sk_env",
+        apiKeySource: "env",
+        apiUrl: config.DEFAULT_API_URL,
+        workspace: null,
+      },
+    );
+  });
+
+  it("sends SPLITS_API_KEY to SPLITS_API_URL, never to a workspace URL", async () => {
     const resolved = await config.resolveCredentials({
       SPLITS_API_KEY: "sk_env",
-      workspace: "acme",
+      SPLITS_API_URL: "https://local.example.com",
     });
 
-    assert.deepEqual(resolved.apiKey, { value: "sk_env", source: "env" });
+    assert.equal(resolved.apiUrl, "https://local.example.com");
+  });
+
+  it("refuses a workspace named next to SPLITS_API_KEY", async () => {
+    await assert.rejects(
+      config.resolveCredentials({ SPLITS_API_KEY: "sk_env", workspace: "acme" }),
+      /SPLITS_API_KEY is set, so workspace "acme" cannot be used/,
+    );
+    await assert.rejects(
+      config.resolveCredentials({
+        SPLITS_API_KEY: "sk_env",
+        SPLITS_WORKSPACE: "acme",
+      }),
+      /SPLITS_API_KEY is set, so workspace "acme" cannot be used/,
+    );
   });
 
   it("lets SPLITS_API_URL win over the workspace URL", async () => {
@@ -221,7 +249,7 @@ describe("auth login", () => {
 
     assert.deepEqual(result, { alias: "acme-2", replaced: false });
     assert.equal(
-      (await config.resolveCredentials({ workspace: "acme" })).apiKey?.value,
+      (await config.resolveCredentials({ workspace: "acme" })).apiKey,
       "sk_prod",
     );
   });
@@ -287,7 +315,7 @@ describe("auth whoami", () => {
   it("fills in the org of a workspace migrated from v1", async () => {
     await writeFile(V1_FILE);
 
-    await config.refreshWorkspaceOrg("default", {
+    await config.refreshWorkspaceOrg("default", "sk_v1", {
       orgId: "org-1",
       orgName: "Acme",
     });
@@ -300,7 +328,7 @@ describe("auth whoami", () => {
   it("keeps the alias when the org is renamed", async () => {
     await login({ orgId: "org-1", orgName: "Acme", apiKey: "sk_1" });
 
-    await config.refreshWorkspaceOrg("acme", {
+    await config.refreshWorkspaceOrg("acme", "sk_1", {
       orgId: "org-1",
       orgName: "Acme Labs",
     });
@@ -311,15 +339,28 @@ describe("auth whoami", () => {
     );
   });
 
+  it("skips the workspace when its key changed after the request", async () => {
+    await login({ orgId: "org-1", orgName: "Acme", apiKey: "sk_new" });
+
+    await config.refreshWorkspaceOrg("acme", "sk_old", {
+      orgId: "org-2",
+      orgName: "Other",
+    });
+
+    const [workspace] = await config.listWorkspaces();
+    assert.equal(workspace.orgId, "org-1");
+    assert.equal(workspace.orgName, "Acme");
+  });
+
   it("writes nothing when the org has not changed", async () => {
     await writeFile(V1_FILE);
-    await config.refreshWorkspaceOrg("default", {
+    await config.refreshWorkspaceOrg("default", "sk_v1", {
       orgId: "org-1",
       orgName: "Acme",
     });
     const before = await fs.stat(CONFIG_PATH);
 
-    await config.refreshWorkspaceOrg("default", {
+    await config.refreshWorkspaceOrg("default", "sk_v1", {
       orgId: "org-1",
       orgName: "Acme",
     });

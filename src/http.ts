@@ -10,7 +10,6 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as WebReadableStream } from "node:stream/web";
 
-import { type CredentialSource, resolveCredentials } from "./config.js";
 
 // Build the User-Agent the backend's `detectPublicApiSource` parses to tag
 // transactions with their origin (CLI vs. MCP vs. raw API). Without this
@@ -50,26 +49,19 @@ type HttpOptions = {
   method?: "GET" | "PUT" | "POST" | "DELETE";
   body?: Record<string, unknown>;
   requireAuth: boolean;
-  credentials?: { apiKey: string; apiUrl: string };
 };
 
-const resolveFromConfig = async (
-  env: CredentialSource,
-): Promise<{ apiKey: string | undefined; apiUrl: string }> => {
-  const resolved = await resolveCredentials(env);
-  return { apiKey: resolved.apiKey?.value, apiUrl: resolved.apiUrl };
-};
+export type Credentials = { apiKey: string | null; apiUrl: string };
 
 export async function httpRequest<T = unknown>(
-  env: CredentialSource,
+  credentials: Credentials,
   path: string,
   options: HttpOptions,
 ): Promise<T> {
-  const credentials = options.credentials ?? (await resolveFromConfig(env));
 
   const headers: Record<string, string> = { "User-Agent": USER_AGENT };
   if (options.requireAuth) {
-    if (credentials.apiKey === undefined) {
+    if (credentials.apiKey === null) {
       throw new SplitsApiError(
         "no-api-key",
         0,
