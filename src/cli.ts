@@ -715,8 +715,7 @@ accounts.command("list", {
 });
 
 accounts.command("get", {
-  description:
-    "Get account details by address, including auto-earn state per chain",
+  description: "Get account details by address",
   env: authEnv,
   options: workspaceOption,
   args: z.object({

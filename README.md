@@ -187,7 +187,7 @@ Each row in the response includes a `direction` field (`inbound` or `outbound`) 
 splits accounts list
 splits accounts list --includeArchived
 
-# Get account details, including auto-earn state per chain
+# Get account details
 splits accounts get <address>
 
 # Get token balances. Earn rows carry an `earn` object with the underlying
