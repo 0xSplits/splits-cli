@@ -2378,7 +2378,7 @@ create.command("earn-withdraw", {
       .int()
       .optional()
       .describe(
-        "Pause auto-earn on this account and chain for 300, 3600, or 86400 seconds once the withdrawal executes, so the asset is not swept back into the vault",
+        "Pause auto-earn on this account and chain for 300, 3600, or 86400 seconds once the withdrawal executes, so the asset is not swept back into the vault. Defaults to 300 when auto-earn is on for the account and chain, and is ignored when it is off",
       ),
   }),
   async run({ env: processEnv, options }) {
