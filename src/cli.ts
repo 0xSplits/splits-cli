@@ -7,14 +7,20 @@ import { Cli, z } from "incur";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 
 import {
+  assertWorkspaceAlias,
   CONFIG_FILE_PATH,
+  type ResolvedCredentials,
+  DEFAULT_API_URL,
   defaultKeyName,
-  loadLocalKeyPublic,
-  removeApiKey,
+  listKeys,
+  listWorkspaces,
+  refreshWorkspaceOrg,
   removeKey,
-  resolveApiKey,
-  saveApiKey,
+  removeWorkspace,
+  resolveCredentials,
   saveKey,
+  saveWorkspace,
+  useWorkspace,
 } from "./config.js";
 import { downloadToFile, httpRequest, SplitsApiError } from "./http.js";
 import { PERIODS, resolvePeriod, type Period } from "./periods.js";
@@ -37,26 +43,49 @@ const cli = Cli.create("splits", {
   description: "Splits CLI — programmatic access to the Splits platform",
 });
 
-// Auth config (reads from env; both values also resolvable from
-// ~/.splits/config.json via `splits auth login`). Env takes precedence.
+// Auth config (reads from env; both values also resolvable from a workspace
+// in ~/.splits/config.json saved by `splits auth login`). Env takes precedence.
 const authEnv = z.object({
   SPLITS_API_KEY: z
     .string()
     .optional()
     .describe(
       "Splits API key (sk_read_... or legacy hex key). " +
-        "Falls back to the key saved by `splits auth login` when unset.",
+        "Falls back to the selected workspace's key saved by `splits auth login` when unset.",
     ),
   SPLITS_API_URL: z
     .string()
     .optional()
     .describe(
       "Splits API base URL. " +
-        "Falls back to the URL saved by `splits auth login`, then to the production URL.",
+        "Falls back to the selected workspace's URL saved by `splits auth login`, then to the production URL.",
+    ),
+  SPLITS_WORKSPACE: z
+    .string()
+    .optional()
+    .describe(
+      "Workspace alias from `splits auth workspaces`. Overrides the active workspace; " +
+        "--workspace overrides it. Cannot be combined with SPLITS_API_KEY.",
     ),
 });
 
-type AuthEnv = z.infer<typeof authEnv>;
+const workspaceOption = z.object({
+  workspace: z
+    .string()
+    .optional()
+    .describe(
+      "Workspace alias to run this command in (see `splits auth workspaces`). " +
+        "Overrides SPLITS_WORKSPACE and the active workspace.",
+    ),
+});
+
+type AuthEnv = ResolvedCredentials;
+
+const withWorkspace = (
+  env: z.infer<typeof authEnv>,
+  options: z.infer<typeof workspaceOption>,
+): Promise<AuthEnv> =>
+  resolveCredentials({ ...env, workspace: options.workspace });
 
 // Shortcut: forward to the shared http helper with auth required.
 const apiRequest = <T = unknown>(
@@ -205,55 +234,65 @@ const auth = Cli.create("auth", {
 auth.command("whoami", {
   description:
     "Show current org, API key name, and scopes. " +
-    "Also reports whether credentials came from the environment or the local keystore " +
-    "and any local EOA signing key saved by `splits auth create-key`. When a local " +
-    "key exists and has been registered with the backend, `localKey.signerId` is the " +
-    "id needed by `accounts update-signers --add-eoa-signer-ids`; null means the key " +
-    "exists locally but has not been registered (see `auth register-signer`).",
+    "Also reports the workspace the credentials came from (null when SPLITS_API_KEY is set), " +
+    "whether they came from the environment or the local keystore, and the local EOA signing " +
+    "keys saved by `splits auth create-key` or `import-key`. For each local key registered " +
+    "with the backend, `localKeys[].signerId` is the id needed by " +
+    "`accounts update-signers --add-eoa-signer-ids`; null means the key exists locally but " +
+    "has not been registered (see `auth register-signer`). " +
+    "Also updates the org id and name saved for the workspace, which `auth workspaces` shows.",
   env: authEnv,
-  async run({ env }) {
-    const resolved = await resolveApiKey(env);
-    if (!resolved) {
-      throw new SplitsApiError(
-        "no-api-key",
-        0,
-        "No API key configured. Run `splits auth login` or export SPLITS_API_KEY.",
-      );
-    }
-    const [response, localKey] = await Promise.all([
-      apiRequest<{ data: Record<string, unknown> }>(env, "/auth/whoami"),
-      loadLocalKeyPublic(),
+  options: workspaceOption,
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
+    const [response, localKeys] = await Promise.all([
+      apiRequest<{
+        data: { orgId: string; orgName: string | null } & Record<
+          string,
+          unknown
+        >;
+      }>(env, "/auth/whoami"),
+      listKeys(),
     ]);
 
-    let localKeyPayload:
-      | (typeof localKey & { signerId: string | null })
-      | null = null;
-    if (localKey) {
-      // Look up the registered signer id for this address, if any. One extra
-      // GET per whoami, tolerant of failure — whoami is meant to be cheap and
-      // machine-parseable, not a hard correctness boundary.
-      let signerId: string | null = null;
+    if (env.workspace !== null && env.apiKey !== null) {
+      try {
+        await refreshWorkspaceOrg(env.workspace, env.apiKey, {
+          orgId: response.data.orgId,
+          orgName: response.data.orgName,
+        });
+      } catch {
+      }
+    }
+
+    // Look up the registered signer ids for the local addresses. One extra
+    // GET per whoami, tolerant of failure: whoami is meant to be cheap and
+    // machine-parseable, not a hard correctness boundary.
+    let signerIdsByAddress = new Map<string, string>();
+    if (localKeys.length > 0) {
       try {
         const signers = await apiRequest<{
           data: Array<{ id: string; address: string }>;
         }>(env, "/eoa_signers");
-        const match = signers.data.find(
-          (s) => s.address.toLowerCase() === localKey.address.toLowerCase(),
+        signerIdsByAddress = new Map(
+          signers.data.map((s) => [s.address.toLowerCase(), s.id]),
         );
-        signerId = match?.id ?? null;
       } catch {
-        // Swallow: whoami still reports the local key even if the signer
-        // lookup fails (rate limit, transient 5xx, etc).
+        // A failed lookup must not fail whoami. The local keys are still
+        // reported, with a null signerId (rate limit, transient 5xx, etc).
       }
-      localKeyPayload = { ...localKey, signerId };
     }
 
     return {
       ...response,
       data: {
         ...response.data,
-        apiKeySource: resolved.source,
-        ...(localKeyPayload ? { localKey: localKeyPayload } : {}),
+        workspace: env.workspace,
+        apiKeySource: env.apiKeySource,
+        localKeys: localKeys.map((key) => ({
+          ...key,
+          signerId: signerIdsByAddress.get(key.address.toLowerCase()) ?? null,
+        })),
       },
     };
   },
@@ -261,10 +300,14 @@ auth.command("whoami", {
 
 auth.command("login", {
   description:
-    "Save a Splits API key to the local config (~/.splits/config.json, mode 0600). " +
+    "Save a Splits API key as a workspace in the local config (~/.splits/config.json, mode 0600) " +
+    "and make it the active workspace. The key is checked against the API first, and the " +
+    "workspace is named after its org unless --name is given; logging in again to the same org " +
+    "refreshes that workspace. Other workspaces and local keys are never removed. " +
     "Prefer stdin to avoid leaking the key to shell history or tool-call transcripts: " +
     "  `echo $SPLITS_API_KEY | splits auth login`. " +
-    "The saved key is only used when the SPLITS_API_KEY env var is not set — env always wins.",
+    "Saved keys are only used when the SPLITS_API_KEY env var is not set — env always wins.",
+  env: authEnv,
   options: z.object({
     apiKey: z
       .string()
@@ -277,16 +320,25 @@ auth.command("login", {
       .url()
       .optional()
       .describe(
-        "Optional API base URL override to persist alongside the key (e.g. staging).",
+        "Optional API base URL override to persist alongside the key (e.g. staging). " +
+          "Defaults to SPLITS_API_URL when that is set, so the saved URL is the one the key was checked against.",
+      ),
+    name: z
+      .string()
+      .optional()
+      .describe(
+        "Workspace alias. Defaults to the org name in lowercase with dashes. " +
+          "An existing workspace with this alias is replaced.",
       ),
   }),
-  async run({ options }) {
+  async run({ env, options }) {
     if (options.apiKey !== undefined && mcpMode()) {
       throw new Error(
         "--api-key flag is refused in MCP mode (`--mcp` or SPLITS_MCP_MODE=1). " +
           "Set SPLITS_API_KEY in the MCP server's environment, or run `auth login` outside MCP.",
       );
     }
+    if (options.name !== undefined) assertWorkspaceAlias(options.name);
 
     let value = options.apiKey ?? (await readStdin());
     value = value.trim();
@@ -296,52 +348,101 @@ auth.command("login", {
       );
     }
 
-    await saveApiKey(value, { apiUrl: options.apiUrl });
+    const apiUrl =
+      options.apiUrl ??
+      (env.SPLITS_API_URL !== undefined && env.SPLITS_API_URL.length > 0
+        ? env.SPLITS_API_URL
+        : undefined);
 
-    const envAlreadySet =
-      typeof process.env.SPLITS_API_KEY === "string" &&
-      process.env.SPLITS_API_KEY.length > 0;
-    if (envAlreadySet) {
+    const { data: org } = await httpRequest<{
+      data: { orgId: string; orgName: string | null };
+    }>(
+      { apiKey: value, apiUrl: apiUrl ?? DEFAULT_API_URL },
+      "/auth/whoami",
+      { requireAuth: true },
+    );
+
+    const { alias, replaced } = await saveWorkspace({
+      name: options.name,
+      orgId: org.orgId,
+      orgName: org.orgName,
+      apiKey: value,
+      apiUrl,
+    });
+
+    if (env.SPLITS_API_KEY !== undefined && env.SPLITS_API_KEY.length > 0) {
       process.stderr.write(
         "Warning: SPLITS_API_KEY env var is set and will take precedence. " +
-          "The saved key is used only when the env var is unset.\n",
+          "Saved workspaces are used only when the env var is unset.\n",
       );
     }
 
     return {
       saved: true,
-      source: "keystore" as const,
-      apiUrl: options.apiUrl ?? null,
+      workspace: alias,
+      replaced,
+      orgId: org.orgId,
+      orgName: org.orgName,
+      apiUrl: apiUrl ?? null,
       path: CONFIG_FILE_PATH,
     };
   },
 });
 
+auth.command("workspaces", {
+  description:
+    "List the workspaces saved by `splits auth login`, with the org each one belongs to " +
+    "and which one is active. API keys are never returned.",
+  async run() {
+    return { workspaces: await listWorkspaces() };
+  },
+});
+
+auth.command("use", {
+  description:
+    "Make a saved workspace the active one. Commands run in the active workspace unless " +
+    "--workspace or SPLITS_WORKSPACE names another, or SPLITS_API_KEY is set.",
+  args: z.object({
+    alias: z.string().describe("Workspace alias (see `splits auth workspaces`)"),
+  }),
+  async run({ args }) {
+    return useWorkspace(args.alias);
+  },
+});
+
 auth.command("logout", {
   description:
-    "Remove the saved API key and API URL override from the local config. " +
+    "Remove a saved workspace (its API key and API URL override) from the local config. " +
+    "Without an alias, removes the active workspace. When the active workspace is removed " +
+    "and exactly one other remains, that one becomes active. " +
     "Does not affect the SPLITS_API_KEY env var or any saved local EOA key — " +
     "use `splits auth delete-key` to remove a local EOA.",
-  async run() {
-    const result = await removeApiKey();
+  args: z.object({
+    alias: z
+      .string()
+      .optional()
+      .describe("Workspace alias to remove. Defaults to the active workspace."),
+  }),
+  async run({ args }) {
+    const { removed, activeWorkspace } = await removeWorkspace(args.alias);
     return {
-      loggedOut: true,
-      removedApiKey: result.hadApiKey,
-      removedApiUrl: result.hadApiUrl,
+      loggedOut: removed !== null,
+      workspace: removed,
+      activeWorkspace,
     };
   },
 });
 
 auth.command("create-key", {
   description:
-    "Generate a new local Ethereum EOA and save it to ~/.splits/config.json (mode 0600). " +
+    "Generate a new local Ethereum EOA and add it to ~/.splits/config.json (mode 0600). " +
     "The key is used by `splits transactions sign` to approve multisig transactions locally. " +
+    "Several keys can be saved; they are not tied to a workspace. " +
     "By default creates the key only; pass --register to also register the address with the " +
     "backend in one call (equivalent to `create-key` + `register-signer <address>`). On " +
-    "registration failure the local key is removed so the next attempt starts fresh. " +
-    "Refuses if a key already exists — delete it first.",
+    "registration failure the new local key is removed so the next attempt starts fresh.",
   env: authEnv,
-  options: z.object({
+  options: workspaceOption.extend({
     name: z
       .string()
       .min(1)
@@ -357,7 +458,8 @@ auth.command("create-key", {
           "as a signer. On backend failure the local key is rolled back.",
       ),
   }),
-  async run({ env, options }) {
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
     const privateKey = generatePrivateKey();
     const account = privateKeyToAccount(privateKey);
     const name = options.name ?? defaultKeyName(account.address);
@@ -391,9 +493,9 @@ auth.command("create-key", {
         registered = result.data;
       } catch (err) {
         // Rollback: the local key is only useful once registered; leaving a
-        // dangling local key with no backend record would confuse the next
-        // run of `create-key` (it refuses when a key exists).
-        await removeKey().catch(() => {
+        // dangling local key with no backend record would add an unusable
+        // entry to the keystore on every failed attempt.
+        await removeKey(account.address).catch(() => {
           // If rollback fails the address is already in the user's
           // terminal; the re-thrown error below tells them how to recover.
         });
@@ -422,11 +524,17 @@ auth.command("create-key", {
 
 auth.command("delete-key", {
   description:
-    "Remove the local EOA signing key from ~/.splits/config.json. " +
+    "Remove a local EOA signing key from ~/.splits/config.json. The address can be omitted " +
+    "when only one key is saved. " +
     "Does NOT revoke the signer on-chain — if the key was registered via " +
     "`update-signers`, run that command again (or the web app) to remove it.",
-  async run() {
-    const { previousAddress } = await removeKey();
+  args: z.object({
+    address: evmAddress
+      .optional()
+      .describe("Address of the local key to remove. Required when several are saved."),
+  }),
+  async run({ args }) {
+    const { previousAddress } = await removeKey(args.address);
     return {
       deleted: previousAddress !== null,
       previousAddress,
@@ -436,7 +544,8 @@ auth.command("delete-key", {
 
 auth.command("import-key", {
   description:
-    "Import an existing Ethereum private key into the local config. " +
+    "Import an existing Ethereum private key into the local config, next to any keys already saved. " +
+    "Importing an address that is already saved changes nothing. " +
     "Prefer stdin to avoid leaking the key to shell history or tool-call transcripts: " +
     "  `echo $PRIVATE_KEY | splits auth import-key`. " +
     "The derived address is echoed to stderr before writing; the key itself is never returned.",
@@ -482,7 +591,7 @@ auth.command("import-key", {
 
     process.stderr.write(`Imported address: ${account.address}\n`);
 
-    await saveKey({
+    const { added } = await saveKey({
       name,
       address: account.address,
       privateKey: normalized,
@@ -491,6 +600,7 @@ auth.command("import-key", {
     return {
       name,
       address: account.address,
+      alreadySaved: !added,
       path: CONFIG_FILE_PATH,
     };
   },
@@ -509,7 +619,7 @@ auth.command("register-signer", {
   args: z.object({
     address: evmAddress.describe("EOA address to register (0x...)"),
   }),
-  options: z.object({
+  options: workspaceOption.extend({
     name: z
       .string()
       .min(1)
@@ -520,7 +630,8 @@ auth.command("register-signer", {
           "re-registering with a different name keeps the original.",
       ),
   }),
-  async run({ env, args, options }) {
+  async run({ env: processEnv, args, options }) {
+    const env = await withWorkspace(processEnv, options);
     const body = {
       address: args.address,
       ...(options.name !== undefined && { name: options.name }),
@@ -544,7 +655,9 @@ auth.command("signers", {
     "needed by `splits accounts update-signers --add-eoa-signer-ids` plus " +
     "each signer's address, display name, and last verification timestamp.",
   env: authEnv,
-  async run({ env }) {
+  options: workspaceOption,
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
     return apiRequest<{
       data: Array<{
         id: string;
@@ -586,13 +699,14 @@ const accounts = Cli.create("accounts", {
 accounts.command("list", {
   description: "List accounts in your org",
   env: authEnv,
-  options: z.object({
+  options: workspaceOption.extend({
     includeArchived: z
       .boolean()
       .default(false)
       .describe("Include archived accounts"),
   }),
-  async run({ env, options }) {
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(
       env,
       `/org/accounts${buildQuery({ includeArchived: options.includeArchived })}`,
@@ -603,10 +717,12 @@ accounts.command("list", {
 accounts.command("get", {
   description: "Get account details by address",
   env: authEnv,
+  options: workspaceOption,
   args: z.object({
     address: evmAddress.describe("Account address (0x...)"),
   }),
-  async run({ env, args }) {
+  async run({ env: processEnv, args, options }) {
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, `/org/accounts/${args.address}`);
   },
 });
@@ -621,13 +737,14 @@ accounts.command("balances", {
         "Account address (0x...). Auto-selected if org has one account.",
       ),
   }),
-  options: z.object({
+  options: workspaceOption.extend({
     chainIds: z
       .string()
       .optional()
       .describe("Comma-separated chain IDs to filter (e.g. 1,8453)"),
   }),
-  async run({ env, args, options }) {
+  async run({ env: processEnv, args, options }) {
+    const env = await withWorkspace(processEnv, options);
     let address = args.address;
     if (!address) {
       const result = await apiRequest<{
@@ -651,10 +768,12 @@ accounts.command("balances", {
 accounts.command("chains", {
   description: "List chains an account is deployed/synced on",
   env: authEnv,
+  options: workspaceOption,
   args: z.object({
     address: evmAddress.describe("Account address (0x...)"),
   }),
-  async run({ env, args }) {
+  async run({ env: processEnv, args, options }) {
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, `/org/accounts/${args.address}/chains`);
   },
 });
@@ -664,10 +783,12 @@ accounts.command("signers", {
     "List passkey and EOA signers (with current threshold) for a subaccount. " +
     "Returns the signer IDs needed by 'accounts update-signers' to add or remove signers.",
   env: authEnv,
+  options: workspaceOption,
   args: z.object({
     address: evmAddress.describe("Account address (0x...)"),
   }),
-  async run({ env, args }) {
+  async run({ env: processEnv, args, options }) {
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, `/org/accounts/${args.address}/signers`);
   },
 });
@@ -676,10 +797,12 @@ accounts.command("archive", {
   description:
     "Archive a subaccount by address. Fails if the account has pending state changes. Requires owner-scoped API key.",
   env: authEnv,
+  options: workspaceOption,
   args: z.object({
     address: evmAddress.describe("Account address (0x...)"),
   }),
-  async run({ env, args }) {
+  async run({ env: processEnv, args, options }) {
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, `/org/accounts/${args.address}/archive`, {
       method: "PUT",
     });
@@ -691,10 +814,12 @@ accounts.command("unarchive", {
     "Unarchive a previously archived subaccount by address. " +
     "Fails if the account has required state updates pending. Requires owner-scoped API key.",
   env: authEnv,
+  options: workspaceOption,
   args: z.object({
     address: evmAddress.describe("Account address (0x...)"),
   }),
-  async run({ env, args }) {
+  async run({ env: processEnv, args, options }) {
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, `/org/accounts/${args.address}/unarchive`, {
       method: "PUT",
     });
@@ -708,7 +833,7 @@ accounts.command("rename", {
   args: z.object({
     address: evmAddress.describe("Account address (0x...)"),
   }),
-  options: z.object({
+  options: workspaceOption.extend({
     name: z
       .string()
       .trim()
@@ -716,7 +841,8 @@ accounts.command("rename", {
       .max(255)
       .describe("New account name (max 255 chars)"),
   }),
-  async run({ env, args, options }) {
+  async run({ env: processEnv, args, options }) {
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, `/org/accounts/${args.address}/rename`, {
       method: "PUT",
       body: { name: options.name },
@@ -733,7 +859,7 @@ accounts.command("create", {
     "'auth signers' to discover EOA signer ids (register new ones with " +
     "'auth register-signer' first). Requires owner-scoped API key.",
   env: authEnv,
-  options: z.object({
+  options: workspaceOption.extend({
     name: z.string().min(1).max(255).describe("Account name (max 255 chars)"),
     passkeyIds: z
       .string()
@@ -758,7 +884,8 @@ accounts.command("create", {
       .min(1)
       .describe("Number of signers required to approve transactions"),
   }),
-  async run({ env, options }) {
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
     const passkeyIds = splitCsv(options.passkeyIds);
     const eoaSignerIds = splitCsv(options.eoaSignerIds);
     const eoaSigners = splitCsv(options.eoaAddresses).map((address) => ({
@@ -801,7 +928,7 @@ accounts.command("update-signers", {
   args: z.object({
     account: evmAddress.describe("Subaccount address (0x...)"),
   }),
-  options: z.object({
+  options: workspaceOption.extend({
     addEoaSignerIds: z
       .string()
       .optional()
@@ -841,7 +968,8 @@ accounts.command("update-signers", {
       .describe("New signer threshold. Unchanged if omitted."),
     memo: z.string().optional().describe("Optional memo (max 500 chars)"),
   }),
-  async run({ env, args, options }) {
+  async run({ env: processEnv, args, options }) {
+    const env = await withWorkspace(processEnv, options);
     const body = {
       account: args.account,
       addPasskeyIds: splitCsv(options.addPasskeyIds),
@@ -971,7 +1099,9 @@ reports.command("list", {
     "List the 50 most recent reports generated for your org, newest first. " +
     "A ready report carries a downloadUrl you can fetch directly.",
   env: authEnv,
-  async run({ env }) {
+  options: workspaceOption,
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, "/accounting/reports");
   },
 });
@@ -990,7 +1120,7 @@ reports.command("generate", {
   args: z.object({
     report: z.enum(REPORT_NAMES).describe("Which report to generate"),
   }),
-  options: z.object({
+  options: workspaceOption.extend({
     fileFormat: z
       .enum(["csv", "pdf"])
       .default("csv")
@@ -1087,7 +1217,8 @@ reports.command("generate", {
         "Date range shorthand resolved in your local timezone. Mutually exclusive with --startDate / --endDate.",
       ),
   }),
-  async run({ env, args, options }) {
+  async run({ env: processEnv, args, options }) {
+    const env = await withWorkspace(processEnv, options);
     const { startDate, endDate } = resolveDateRange(options);
     const fileFormat =
       args.report === "statement" ? "pdf" : options.fileFormat;
@@ -1173,10 +1304,12 @@ reports.command("job", {
     "Check a queued report. Returns its download URL once the file is written. " +
     "Report jobs do not retry, so failed is final.",
   env: authEnv,
+  options: workspaceOption,
   args: z.object({
     jobId: z.string().describe("Job id returned by 'accounting reports generate'"),
   }),
-  async run({ env, args }) {
+  async run({ env: processEnv, args, options }) {
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, `/accounting/reports/jobs/${args.jobId}`);
   },
 });
@@ -1192,7 +1325,7 @@ lots.command("list", {
     "List tax lots, one page at a time. Use this to find the lot id, target key, " +
     "anchor transfer, or transfer id an assertion needs to name.",
   env: authEnv,
-  options: z.object({
+  options: workspaceOption.extend({
     pageIndex: z.number().min(0).default(0).describe("Zero-based page index"),
     pageSize: z.number().min(1).max(50).default(50).describe("Rows per page, max 50"),
     accountIds: z
@@ -1247,7 +1380,8 @@ lots.command("list", {
       .describe("Sort column"),
     sortDirection: z.enum(["asc", "desc"]).optional().describe("Sort direction"),
   }),
-  async run({ env, options }) {
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(
       env,
       `/accounting/lots${buildQuery({
@@ -1281,7 +1415,7 @@ lots.command("assertions", {
   args: z.object({
     lotId: z.string().describe("Lot id from 'accounting lots list'"),
   }),
-  options: z.object({
+  options: workspaceOption.extend({
     limit: z
       .number()
       .int()
@@ -1294,7 +1428,8 @@ lots.command("assertions", {
       .optional()
       .describe("nextCursor from the previous page"),
   }),
-  async run({ env, args, options }) {
+  async run({ env: processEnv, args, options }) {
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(
       env,
       `/accounting/lots/${args.lotId}/assertions${buildQuery({
@@ -1334,7 +1469,7 @@ assertions.command("seed", {
     "Requires unit price, acquisition time, and quantity together, since a seed materializes the whole lot. " +
     "Quantity is in base units (wei for ETH, 6-decimal units for USDC).",
   env: authEnv,
-  options: z.object({
+  options: workspaceOption.extend({
     ...assertionTarget,
     unitPrice: z
       .string()
@@ -1355,7 +1490,8 @@ assertions.command("seed", {
           "Rerunning with the same key updates the lot instead of creating a second one.",
       ),
   }),
-  async run({ env, options }) {
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
     return writeAssertion(env, {
       kind: "seed",
       smartAccountId: options.smartAccountId,
@@ -1375,7 +1511,7 @@ assertions.command("edit", {
     "Asserts at least one of unit price, acquisition time, or origin lot. " +
     "Quantity is never editable: the account's real balance is ground truth.",
   env: authEnv,
-  options: z.object({
+  options: workspaceOption.extend({
     ...assertionTarget,
     sourceTransferId: z
       .string()
@@ -1400,7 +1536,8 @@ assertions.command("edit", {
       .optional()
       .describe("Corrected lot this one carries basis from"),
   }),
-  async run({ env, options }) {
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
     if (!options.unitPrice && !options.acquisitionTime && !options.originLotId) {
       throw new Error(
         "An edit must assert at least one of --unit-price, --acquisition-time, or --origin-lot-id.",
@@ -1428,7 +1565,7 @@ assertions.command("revoke", {
     "Withdraw an earlier assertion, returning the lot to what the engine derived. " +
     "Names exactly one of --target-key (a seed), --source-transfer-id (an edit), or --transfer-id (a designation).",
   env: authEnv,
-  options: z.object({
+  options: workspaceOption.extend({
     ...assertionTarget,
     targetKey: z.string().optional().describe("Target key of a seeded lot"),
     sourceTransferId: z
@@ -1444,7 +1581,8 @@ assertions.command("revoke", {
       .optional()
       .describe("Inbound transfer a designation marked"),
   }),
-  async run({ env, options }) {
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
     const named = [
       options.targetKey,
       options.sourceTransferId,
@@ -1479,13 +1617,14 @@ assertions.command("designate", {
     "Mark an inbound transfer as drawing from seeded inventory, so it carries basis " +
     "from the seed instead of opening a fresh lot at the transfer's price.",
   env: authEnv,
-  options: z.object({
+  options: workspaceOption.extend({
     ...assertionTarget,
     transferId: z
       .string()
       .describe("Inbound transfer to designate"),
   }),
-  async run({ env, options }) {
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
     return writeAssertion(env, {
       kind: "designate",
       smartAccountId: options.smartAccountId,
@@ -1503,12 +1642,13 @@ assertions.command("bulk", {
     "({ kind, smartAccountId, chainId, tokenAddress, ... }); field names match the single-assertion flags. " +
     "Every seed must carry a targetKey, so re-running the same file corrects those lots instead of creating a second set of them.",
   env: authEnv,
-  options: z.object({
+  options: workspaceOption.extend({
     file: z
       .string()
       .describe("Path to a JSON file holding an array of assertions"),
   }),
-  async run({ env, options }) {
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
     const parsed: unknown = JSON.parse(readFileSync(options.file, "utf8"));
 
     if (!Array.isArray(parsed)) {
@@ -1536,7 +1676,7 @@ imports.command("create", {
     "Queues a per-chain backfill; poll it with 'accounting imports status'. " +
     "Replaying the same import returns the existing account rather than creating a second one.",
   env: authEnv,
-  options: z.object({
+  options: workspaceOption.extend({
     name: z.string().min(1).describe("Name for the imported account"),
     address: evmAddress.describe("Address to import (0x...)"),
     chainIds: z
@@ -1549,7 +1689,8 @@ imports.command("create", {
         "Ignore activity after this instant, e.g. the date the treasury migrated to Splits. ISO 8601. Omit to import everything.",
       ),
   }),
-  async run({ env, options }) {
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
     const chainIds = splitCsv(options.chainIds).map((id) => {
       const parsed = Number(id);
       if (!Number.isInteger(parsed) || parsed <= 0) {
@@ -1577,7 +1718,9 @@ imports.command("create", {
 imports.command("list", {
   description: "List imported accounts and their cutoff dates",
   env: authEnv,
-  async run({ env }) {
+  options: workspaceOption,
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, "/accounting/imports");
   },
 });
@@ -1591,12 +1734,13 @@ imports.command("status", {
       .string()
       .describe("Imported account id from 'accounting imports create'"),
   }),
-  options: z.object({
+  options: workspaceOption.extend({
     chainIds: z
       .string()
       .describe("Comma-separated chain ids the import was created with"),
   }),
-  async run({ env, args, options }) {
+  async run({ env: processEnv, args, options }) {
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(
       env,
       `/accounting/imports/${args.smartAccountId}/jobs${buildQuery({
@@ -1617,7 +1761,9 @@ recompute.command("current", {
   description:
     "Read the recompute in flight or most recently settled for the org. A null job means lots are current.",
   env: authEnv,
-  async run({ env }) {
+  options: workspaceOption,
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, "/accounting/recompute");
   },
 });
@@ -1626,10 +1772,12 @@ recompute.command("job", {
   description:
     "Poll a recompute. Status 'unknown' still means settled. A non-null nextJobId means a write landed mid-run: poll that job next.",
   env: authEnv,
+  options: workspaceOption,
   args: z.object({
     jobId: z.string().describe("Job id from 'accounting recompute current' or 'run'"),
   }),
-  async run({ env, args }) {
+  async run({ env: processEnv, args, options }) {
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, `/accounting/recompute/${args.jobId}`);
   },
 });
@@ -1639,7 +1787,9 @@ recompute.command("run", {
     "Queue a full lot recompute. Writes already queue one, so this is only for forcing a rebuild. " +
     "Returns the running job instead of queueing a second. Requires a write-scoped key.",
   env: authEnv,
-  async run({ env }) {
+  options: workspaceOption,
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, "/accounting/recompute", { method: "PUT" });
   },
 });
@@ -1665,7 +1815,7 @@ transactions.command("list", {
     "look up a transaction by its user-op hash returned from 'transactions sign': { userOpHash: '0x1dfe…dcf' }; " +
     "look up an on-chain transaction by hash: { transactionHash: '0xabc…def', chainId: 8453 }",
   env: authEnv,
-  options: z.object({
+  options: workspaceOption.extend({
     chainId: z.number().optional().describe("Filter by chain ID"),
     limit: z
       .number()
@@ -1742,7 +1892,8 @@ transactions.command("list", {
         "Filter by ERC-4337 user-operation hash (0x-prefixed, 32 bytes). Returns 0 or 1 result. Only splits-initiated transactions have a userOpHash; asset-transfer rows are excluded when this filter is set. Use this to look up a transaction submitted via 'transactions sign --submit' from the returned userOpHash.",
       ),
   }),
-  async run({ env, options }) {
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
     const { startDate, endDate } = resolveDateRange(options);
 
     return apiRequest(
@@ -1768,10 +1919,12 @@ transactions.command("list", {
 transactions.command("get", {
   description: "Get details for a specific transaction",
   env: authEnv,
+  options: workspaceOption,
   args: z.object({
     id: transactionId.describe("Transaction ID"),
   }),
-  async run({ env, args }) {
+  async run({ env: processEnv, args, options }) {
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, `/transactions/${args.id}`);
   },
 });
@@ -1782,13 +1935,14 @@ transactions.command("memo", {
   args: z.object({
     id: transactionId.describe("Transaction ID"),
   }),
-  options: z.object({
+  options: workspaceOption.extend({
     memo: z
       .string()
       .max(500)
       .describe("New memo text (max 500 chars). Empty string clears the memo."),
   }),
-  async run({ env, args, options }) {
+  async run({ env: processEnv, args, options }) {
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, `/transactions/${args.id}`, {
       method: "PUT",
       body: { memo: options.memo },
@@ -1887,7 +2041,7 @@ properties.command("set", {
   args: z.object({
     id: transactionId.describe("Transaction ID"),
   }),
-  options: z.object({
+  options: workspaceOption.extend({
     properties: propertiesOptionSchema
       .optional()
       .describe(
@@ -1906,7 +2060,8 @@ properties.command("set", {
         "Delete a key from the existing properties; repeatable. Example: --unset oldkey",
       ),
   }),
-  async run({ env, args, options }) {
+  async run({ env: processEnv, args, options }) {
+    const env = await withWorkspace(processEnv, options);
     if (
       options.properties === undefined &&
       (!options.property || options.property.length === 0) &&
@@ -1945,7 +2100,7 @@ properties.command("replace", {
   args: z.object({
     id: transactionId.describe("Transaction ID"),
   }),
-  options: z.object({
+  options: workspaceOption.extend({
     properties: propertiesOptionSchema
       .optional()
       .describe(
@@ -1958,7 +2113,8 @@ properties.command("replace", {
         "String key/value overlays applied on top of --properties; repeatable. Splits on the first '='.",
       ),
   }),
-  async run({ env, args, options }) {
+  async run({ env: processEnv, args, options }) {
+    const env = await withWorkspace(processEnv, options);
     if (
       options.properties === undefined &&
       (!options.property || options.property.length === 0)
@@ -1980,10 +2136,12 @@ properties.command("replace", {
 properties.command("clear", {
   description: "Clear all custom JSON metadata from a transaction.",
   env: authEnv,
+  options: workspaceOption,
   args: z.object({
     id: transactionId.describe("Transaction ID"),
   }),
-  async run({ env, args }) {
+  async run({ env: processEnv, args, options }) {
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, `/transactions/${args.id}`, {
       method: "PUT",
       body: { properties: null },
@@ -1997,10 +2155,12 @@ transactions.command("update-gas-estimation", {
   description:
     "Update gas estimates for an existing transaction. For multisig, run this when one signer remains.",
   env: authEnv,
+  options: workspaceOption,
   args: z.object({
     id: transactionId.describe("Transaction ID"),
   }),
-  async run({ env, args }) {
+  async run({ env: processEnv, args, options }) {
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, `/transactions/${args.id}/update_gas_estimation`, {
       method: "PUT",
     });
@@ -2019,7 +2179,7 @@ create.command("transfer", {
   description:
     "Create a token transfer proposal from a smart account. Specify amount in human-readable units (e.g. '100' for 100 USDC). Returns the proposal with gas estimates.",
   env: authEnv,
-  options: z.object({
+  options: workspaceOption.extend({
     account: z
       .string()
       .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid Ethereum address")
@@ -2080,7 +2240,8 @@ create.command("transfer", {
         "Unix timestamp (seconds) when the proposal expires. Defaults to 7 days from now. Must be in the future and at most 30 days out.",
       ),
   }),
-  async run({ env, options }) {
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
     const properties =
       options.properties !== undefined || options.property?.length
         ? applyPropertyOverlays(
@@ -2112,7 +2273,7 @@ create.command("custom", {
   description:
     "Create a transaction proposal with raw EVM calls. Use for any on-chain action including contract interactions, approvals, and swaps.",
   env: authEnv,
-  options: z.object({
+  options: workspaceOption.extend({
     account: z
       .string()
       .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid Ethereum address")
@@ -2176,7 +2337,8 @@ create.command("custom", {
         "Unix timestamp (seconds) when the proposal expires. Defaults to 7 days from now. Must be in the future and at most 30 days out.",
       ),
   }),
-  async run({ env, options }) {
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
     const properties =
       options.properties !== undefined || options.property?.length
         ? applyPropertyOverlays(
@@ -2212,13 +2374,15 @@ transactions.command("cancel", {
   description:
     "Cancel a pending transaction proposal. Only works on proposals in CREATED or DRAFTED status.",
   env: authEnv,
+  options: workspaceOption,
   args: z.object({
     id: z
       .string()
       .uuid("Invalid transaction ID")
       .describe("The proposal ID to cancel"),
   }),
-  async run({ env, args }) {
+  async run({ env: processEnv, args, options }) {
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, `/proposals/${args.id}`, {
       method: "DELETE",
     });
@@ -2227,8 +2391,9 @@ transactions.command("cancel", {
 
 transactions.command("sign", {
   description:
-    "Sign a pending multisig transaction with the local EOA saved by " +
+    "Sign a pending multisig transaction with a local EOA saved by " +
     "`splits auth create-key` or `splits auth import-key`. " +
+    "Pass --key when several local keys are saved; with one it is used by default. " +
     "Fetches the transaction's signingHash, produces a personal_sign signature locally, " +
     "and submits it via POST /public/v1/transactions/:id/sign. " +
     "By default auto-submits the UserOp when this signature meets threshold; " +
@@ -2237,16 +2402,25 @@ transactions.command("sign", {
   args: z.object({
     id: transactionId.describe("Transaction ID to sign"),
   }),
-  options: z.object({
+  options: workspaceOption.extend({
     noSubmit: z
       .boolean()
       .default(false)
       .describe(
         "Record the signature but do not auto-submit the UserOp even if this signature meets threshold.",
       ),
+    key: evmAddress
+      .optional()
+      .describe(
+        "Address of the local key to sign with. Required when several local keys are saved.",
+      ),
   }),
-  async run({ env, args, options }) {
-    return signTransactionLocally(env, args.id, { submit: !options.noSubmit });
+  async run({ env: processEnv, args, options }) {
+    const env = await withWorkspace(processEnv, options);
+    return signTransactionLocally(env, args.id, {
+      submit: !options.noSubmit,
+      keyAddress: options.key,
+    });
   },
 });
 
@@ -2263,14 +2437,15 @@ const contacts = Cli.create("contacts", {
 contacts.command("list", {
   description: "Search or list contacts for your org",
   env: authEnv,
-  options: z.object({
+  options: workspaceOption.extend({
     q: z
       .string()
       .max(200)
       .optional()
       .describe("Search term to filter contacts by name, label, or address"),
   }),
-  async run({ env, options }) {
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, `/contacts${buildQuery({ q: options.q })}`);
   },
 });
@@ -2278,12 +2453,13 @@ contacts.command("list", {
 contacts.command("lookup", {
   description: "Batch address lookup for contact info",
   env: authEnv,
-  options: z.object({
+  options: workspaceOption.extend({
     addresses: z
       .string()
       .describe("Comma-separated Ethereum addresses to look up (max 100)"),
   }),
-  async run({ env, options }) {
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(
       env,
       `/contacts/lookup${buildQuery({ addresses: options.addresses })}`,
@@ -2304,11 +2480,12 @@ const tokens = Cli.create("tokens", {
 tokens.command("metadata", {
   description: "Get token metadata (symbol, decimals) by address and chain",
   env: authEnv,
-  options: z.object({
+  options: workspaceOption.extend({
     address: z.string().describe("Token contract address (0x...)"),
     chainId: z.number().describe("Chain ID"),
   }),
-  async run({ env, options }) {
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(
       env,
       `/tokens/metadata${buildQuery({
@@ -2324,7 +2501,9 @@ tokens.command("whitelist", {
     "List your org's allowlisted tokens. Token allow/block lists affect display " +
     "and balance filtering only; they are not enforced at proposal or signing time.",
   env: authEnv,
-  async run({ env }) {
+  options: workspaceOption,
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, "/tokens/whitelist");
   },
 });
@@ -2334,7 +2513,9 @@ tokens.command("blocklist", {
     "List your org's blocked tokens. Token allow/block lists affect display " +
     "and balance filtering only; they are not enforced at proposal or signing time.",
   env: authEnv,
-  async run({ env }) {
+  options: workspaceOption,
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, "/tokens/blocklist");
   },
 });
@@ -2352,7 +2533,9 @@ const chains = Cli.create("chains", {
 chains.command("list", {
   description: "List all supported chains",
   env: authEnv,
-  async run({ env }) {
+  options: workspaceOption,
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, "/chains");
   },
 });
@@ -2360,10 +2543,12 @@ chains.command("list", {
 chains.command("get", {
   description: "Get chain info by ID",
   env: authEnv,
+  options: workspaceOption,
   args: z.object({
     chainId: z.number().describe("Chain ID (e.g. 1, 8453)"),
   }),
-  async run({ env, args }) {
+  async run({ env: processEnv, args, options }) {
+    const env = await withWorkspace(processEnv, options);
     const result = await apiRequest<{
       data: Array<{ chainId: number }>;
     }>(env, "/chains");
@@ -2388,7 +2573,9 @@ const members = Cli.create("members", {
 members.command("list", {
   description: "List members of your org",
   env: authEnv,
-  async run({ env }) {
+  options: workspaceOption,
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, "/members");
   },
 });
@@ -2398,13 +2585,15 @@ members.command("signers", {
     "List passkey signers for a specific org member by user ID. " +
     "Use 'members list' first to find user IDs. Returns passkey IDs needed for 'accounts create'.",
   env: authEnv,
+  options: workspaceOption,
   args: z.object({
     userId: z
       .string()
       .uuid("Invalid user ID")
       .describe("Member user ID from 'members list'"),
   }),
-  async run({ env, args }) {
+  async run({ env: processEnv, args, options }) {
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, `/members/${args.userId}/signers`);
   },
 });
@@ -2422,7 +2611,9 @@ const settings = Cli.create("settings", {
 settings.command("get", {
   description: "Get your org's settings",
   env: authEnv,
-  async run({ env }) {
+  options: workspaceOption,
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, "/settings");
   },
 });
@@ -2440,7 +2631,9 @@ const automations = Cli.create("automations", {
 automations.command("list", {
   description: "List automations for your org",
   env: authEnv,
-  async run({ env }) {
+  options: workspaceOption,
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
     return apiRequest(env, "/automations");
   },
 });
@@ -2481,7 +2674,7 @@ org.command("create", {
       ),
   }),
   async run({ env, options }) {
-    return httpRequest(env, "/auth/send-create-org-link", {
+    return httpRequest(await resolveCredentials(env), "/auth/send-create-org-link", {
       method: "POST",
       requireAuth: false,
       body: { email: options.email },

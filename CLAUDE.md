@@ -18,6 +18,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```sh
 pnpm install                                    # install deps
+pnpm test                                       # unit tests (node:test via tsx)
 pnpm dev <command>                              # run locally via tsx (e.g. pnpm dev accounts list)
 pnpm build                                      # tsc → dist/
 pnpm release                                    # patch bump + publish (runs build via prepublishOnly)
@@ -26,7 +27,7 @@ npm version major && pnpm publish --access public   # major release
 npm pack --dry-run                              # preview published package contents
 ```
 
-There are no lint, typecheck, or test scripts — `pnpm build` (tsc in strict mode) is the only static check. `SPLITS_API_KEY` must be set in the environment for any command that hits the API.
+There are no lint or typecheck scripts — `pnpm build` (tsc in strict mode) is the only static check. `pnpm test` runs the `src/*.test.ts` unit tests with `node:test` (they are excluded from the build). Commands that hit the API need `SPLITS_API_KEY` or a workspace saved by `splits auth login`.
 
 ## Architecture
 
@@ -34,7 +35,7 @@ The entire CLI lives in a single file: `src/cli.ts`. This is intentional — do 
 
 - **Framework**: `incur` provides the `Cli.create` / `command` / `z` (Zod) API. Each top-level namespace (`accounts`, `transactions`, `contacts`, `tokens`, `chains`, `members`, `settings`, `automations`, `auth`) is its own `Cli.create(...)` sub-CLI, registered onto the root via `cli.command(sub)`.
 - **MCP server**: `cli.serve()` at the bottom of the file both runs the CLI and exposes the same commands as MCP tools when invoked with `--mcp`. Adding a new command automatically makes it available as an MCP tool — there is no separate MCP registration step.
-- **Auth**: every command declares `env: authEnv`, which Zod-validates `SPLITS_API_KEY` (required) and `SPLITS_API_URL` (defaults to `https://server.production.splits.org`) from the environment. Reuse the shared `authEnv` object instead of introducing command-specific auth handling.
+- **Auth**: every authenticated command declares `env: authEnv` (`SPLITS_API_KEY`, `SPLITS_API_URL`, `SPLITS_WORKSPACE`) and `options: workspaceOption` (or `workspaceOption.extend({...})`), and starts its `run` with `const env = await withWorkspace(processEnv, options)`, which resolves the API key and URL once for the whole command. incur has no global flags, so this is how `--workspace` reaches every command and every MCP tool. Credentials resolve in `resolveCredentials` (`src/config.ts`): `SPLITS_API_KEY` → `--workspace` → `SPLITS_WORKSPACE` → active workspace in `~/.splits/config.json`. An env key never mixes with a workspace: it goes to `SPLITS_API_URL` or production, and naming a workspace next to it is an error. Reuse these instead of introducing command-specific auth handling.
 - **API calls**: all requests go through the `apiRequest(env, path, options?)` helper, which hits `${SPLITS_API_URL}/public/v1${path}` with a `Bearer` token and unwraps `{ error: { message } }` responses into thrown `Error`s. Never call `fetch` directly from a command.
 - **Query strings**: use the `buildQuery` helper — it skips `undefined` and `false` values, so boolean flags only get sent when truthy.
 - **Return values**: commands should return plain JSON-compatible data so incur can expose them cleanly through `--format`, `--schema`, and `--llms`.
@@ -62,8 +63,9 @@ The entire CLI lives in a single file: `src/cli.ts`. This is intentional — do 
 
 | Variable | Required | Description |
 |---|---|---|
-| `SPLITS_API_KEY` | Yes | Splits API key |
-| `SPLITS_API_URL` | No | Defaults to `https://server.production.splits.org` |
+| `SPLITS_API_KEY` | No | Splits API key; wins over any saved workspace |
+| `SPLITS_API_URL` | No | Defaults to the workspace's saved URL, then `https://server.production.splits.org` |
+| `SPLITS_WORKSPACE` | No | Workspace alias to use instead of the active one |
 
 ## Monorepo context
 
