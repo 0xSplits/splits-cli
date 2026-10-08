@@ -728,7 +728,8 @@ accounts.command("get", {
 });
 
 accounts.command("balances", {
-  description: "Get token balances for an account",
+  description:
+    "Get token balances for an account. Earn vault rows include an earn object with the underlying asset and the amount the shares redeem for.",
   env: authEnv,
   args: z.object({
     address: evmAddress
