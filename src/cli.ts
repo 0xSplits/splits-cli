@@ -344,7 +344,8 @@ const loginSigner = async (address: string | undefined) => {
   return { account, keyCreated: true };
 };
 
-const defaultClientName = (): string => `Splits CLI on ${hostname()}`;
+const defaultClientName = (): string =>
+  `Splits CLI on ${hostname().split(".")[0]}`;
 
 const LOGIN_OUTCOME_MESSAGES = {
   denied: "The login request was denied in the browser.",
