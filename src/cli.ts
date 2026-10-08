@@ -140,7 +140,7 @@ const readStdin = async (): Promise<string> => {
         Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string),
       );
     }
-    return Buffer.concat(chunks).toString("utf-8").trim();
+    return Buffer.concat(chunks).toString("utf-8");
   })();
 
   const timeout = new Promise<never>((_, reject) =>
@@ -365,26 +365,33 @@ const saveApprovedLogin = async ({
   name: string | undefined;
   signerAddress: string;
 }) => {
-  const { data: org } = await httpRequest<{
-    data: { orgId: string; orgName: string | null };
-  }>(
-    { apiKey: grant.apiKey, apiUrl: apiUrl ?? DEFAULT_API_URL },
-    "/auth/whoami",
-    { requireAuth: true },
-  );
   const { alias, replaced } = await saveWorkspace({
     name,
-    orgId: org.orgId,
-    orgName: org.orgName,
+    orgId: grant.orgId,
+    orgName: grant.orgName,
     apiKey: grant.apiKey,
     apiUrl,
   });
+  const verified = await httpRequest(
+    { apiKey: grant.apiKey, apiUrl: apiUrl ?? DEFAULT_API_URL },
+    "/auth/whoami",
+    { requireAuth: true },
+  ).then(
+    () => true,
+    (error: unknown) => {
+      process.stderr.write(
+        `Warning: the workspace was saved, but checking its key failed: ${error instanceof Error ? error.message : String(error)}. Run \`splits auth whoami\` to retry.\n`,
+      );
+      return false;
+    },
+  );
   return {
     saved: true,
+    verified,
     workspace: alias,
     replaced,
-    orgId: org.orgId,
-    orgName: org.orgName,
+    orgId: grant.orgId,
+    orgName: grant.orgName,
     scopes: grant.scopes,
     created: grant.created,
     diagram:
@@ -473,7 +480,13 @@ auth.command("login", {
     if (options.name !== undefined) assertWorkspaceAlias(options.name);
 
     const apiUrl = resolveLoginApiUrl(env, options.apiUrl);
-    const value = (options.apiKey ?? (await readStdin())).trim();
+    const input = options.apiKey ?? (await readStdin());
+    const value = input.trim();
+    if (input.length > 0 && value.length === 0) {
+      throw new Error(
+        "The API key on --api-key or stdin is empty. Pipe a key, or run `splits auth login` with no input to log in through the browser.",
+      );
+    }
 
     if (value.length === 0) {
       const { account, keyCreated } = await loginSigner(options.key);
@@ -616,8 +629,8 @@ auth.command("login-status", {
       };
     }
 
-    await removePendingLogin(pending.requestId);
     if (result.status !== "approved") {
+      await removePendingLogin(pending.requestId);
       return {
         status: result.status,
         requestId: pending.requestId,
@@ -631,6 +644,7 @@ auth.command("login-status", {
       name: pending.name ?? undefined,
       signerAddress: pending.signerAddress,
     });
+    await removePendingLogin(pending.requestId);
     warnIfEnvKeySet(env);
     return { status: result.status, requestId: pending.requestId, ...saved };
   },

@@ -114,6 +114,11 @@ export const pollAgentLogin = async ({
   }
 };
 
+const isTransientPollError = (error: unknown): boolean =>
+  error instanceof TypeError ||
+  (error instanceof SplitsApiError &&
+    (error.status === 0 || error.status === 429 || error.status >= 500));
+
 export const pollIntervalMs = (elapsedMs: number): number =>
   elapsedMs < FAST_POLL_WINDOW_MS ? FAST_POLL_MS : SLOW_POLL_MS;
 
@@ -132,7 +137,10 @@ export const waitForAgentLogin = async ({
   const deadline = Date.parse(expiresAt);
   while (now() < deadline) {
     await sleep(pollIntervalMs(now() - startedAt));
-    const result = await poll();
+    const result = await poll().catch((error: unknown) => {
+      if (isTransientPollError(error)) return { status: "pending" as const };
+      throw error;
+    });
     if (result.status !== "pending") return result;
   }
   return { status: "expired" };

@@ -8,6 +8,7 @@ import {
   pollIntervalMs,
   waitForAgentLogin,
 } from "./agent-login.js";
+import { SplitsApiError } from "./http.js";
 
 describe("browser login", () => {
   it("derives the S256 challenge from the verifier", () => {
@@ -50,6 +51,44 @@ describe("browser login", () => {
 
     assert.equal(result.status, "approved");
     assert.deepEqual(clock.sleeps, [2_000, 2_000, 2_000]);
+  });
+
+  it("keeps waiting through rate limits and server errors", async () => {
+    const failures = [
+      new SplitsApiError(undefined, 429, "Too many requests"),
+      new SplitsApiError(undefined, 502, "Bad gateway"),
+      new TypeError("fetch failed"),
+    ];
+    const clock = fakeClock();
+
+    const result = await waitForAgentLogin({
+      poll: async () => {
+        const failure = failures.shift();
+        if (failure) throw failure;
+        return { status: "denied" };
+      },
+      expiresAt: new Date(clock.now() + 600_000).toISOString(),
+      sleep: clock.sleep,
+      now: clock.now,
+    });
+
+    assert.deepEqual(result, { status: "denied" });
+  });
+
+  it("stops on an error that waiting cannot fix", async () => {
+    const clock = fakeClock();
+
+    await assert.rejects(
+      waitForAgentLogin({
+        poll: async () => {
+          throw new SplitsApiError("VALIDATION_ERROR", 400, "Bad verifier");
+        },
+        expiresAt: new Date(clock.now() + 600_000).toISOString(),
+        sleep: clock.sleep,
+        now: clock.now,
+      }),
+      /Bad verifier/,
+    );
   });
 
   it("reports expired once the request outlives its deadline", async () => {
