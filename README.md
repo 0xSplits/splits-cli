@@ -197,6 +197,11 @@ splits accounts list --includeArchived
 # Get account details
 splits accounts get <address>
 
+# Get token balances. Earn vault rows carry an `earn` object with the
+# underlying asset and the amount the shares redeem for. The address is
+# auto-selected if the org has one account.
+splits accounts balances [address] --chainIds 8453,1
+
 # List signers (passkeys + EOAs) and threshold for a subaccount
 splits accounts signers <address>
 
