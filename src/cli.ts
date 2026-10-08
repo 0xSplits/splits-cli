@@ -1,11 +1,20 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync, statSync } from "node:fs";
+import { hostname } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { Cli, z } from "incur";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 
+import {
+  type AgentLoginGrant,
+  describeCreatedWorkspace,
+  openInBrowser,
+  pollAgentLogin,
+  startAgentLogin,
+  waitForAgentLogin,
+} from "./agent-login.js";
 import {
   assertWorkspaceAlias,
   CONFIG_FILE_PATH,
@@ -14,11 +23,15 @@ import {
   defaultKeyName,
   listKeys,
   listWorkspaces,
+  loadLocalKey,
+  loadPendingLogin,
   refreshWorkspaceOrg,
   removeKey,
+  removePendingLogin,
   removeWorkspace,
   resolveCredentials,
   saveKey,
+  savePendingLogin,
   saveWorkspace,
   useWorkspace,
 } from "./config.js";
@@ -298,37 +311,150 @@ auth.command("whoami", {
   },
 });
 
+const resolveLoginApiUrl = (
+  env: z.infer<typeof authEnv>,
+  apiUrl: string | undefined,
+): string | undefined =>
+  apiUrl ??
+  (env.SPLITS_API_URL !== undefined && env.SPLITS_API_URL.length > 0
+    ? env.SPLITS_API_URL
+    : undefined);
+
+const warnIfEnvKeySet = (env: z.infer<typeof authEnv>): void => {
+  if (env.SPLITS_API_KEY !== undefined && env.SPLITS_API_KEY.length > 0) {
+    process.stderr.write(
+      "Warning: SPLITS_API_KEY env var is set and will take precedence. " +
+        "Saved workspaces are used only when the env var is unset.\n",
+    );
+  }
+};
+
+const loginSigner = async (address: string | undefined) => {
+  const saved = await loadLocalKey(address);
+  if (saved !== null) {
+    return { account: privateKeyToAccount(saved.privateKey), keyCreated: false };
+  }
+  const privateKey = generatePrivateKey();
+  const account = privateKeyToAccount(privateKey);
+  await saveKey({
+    name: defaultKeyName(account.address),
+    address: account.address,
+    privateKey,
+  });
+  return { account, keyCreated: true };
+};
+
+const defaultClientName = (): string => `Splits CLI on ${hostname()}`;
+
+const LOGIN_OUTCOME_MESSAGES = {
+  denied: "The login request was denied in the browser.",
+  expired:
+    "The login request expired or was not found. Start a new one with `splits auth login`.",
+  consumed:
+    "Another process already collected the API key for this login. Start a new one with `splits auth login`.",
+} as const;
+
+const saveApprovedLogin = async ({
+  grant,
+  apiUrl,
+  name,
+  signerAddress,
+}: {
+  grant: AgentLoginGrant;
+  apiUrl: string | undefined;
+  name: string | undefined;
+  signerAddress: string;
+}) => {
+  const { data: org } = await httpRequest<{
+    data: { orgId: string; orgName: string | null };
+  }>(
+    { apiKey: grant.apiKey, apiUrl: apiUrl ?? DEFAULT_API_URL },
+    "/auth/whoami",
+    { requireAuth: true },
+  );
+  const { alias, replaced } = await saveWorkspace({
+    name,
+    orgId: org.orgId,
+    orgName: org.orgName,
+    apiKey: grant.apiKey,
+    apiUrl,
+  });
+  return {
+    saved: true,
+    workspace: alias,
+    replaced,
+    orgId: org.orgId,
+    orgName: org.orgName,
+    scopes: grant.scopes,
+    created: grant.created,
+    diagram:
+      grant.created === null
+        ? null
+        : describeCreatedWorkspace({
+            orgName: grant.orgName,
+            created: grant.created,
+            signerAddress,
+          }),
+    apiUrl: apiUrl ?? null,
+    path: CONFIG_FILE_PATH,
+  };
+};
+
+const loginOptions = z.object({
+  apiUrl: z
+    .string()
+    .url()
+    .optional()
+    .describe(
+      "Optional API base URL override to persist alongside the key (e.g. staging). " +
+        "Defaults to SPLITS_API_URL when that is set, so the saved URL is the one the key was checked against.",
+    ),
+  name: z
+    .string()
+    .optional()
+    .describe(
+      "Workspace alias. Defaults to the org name in lowercase with dashes. " +
+        "An existing workspace with this alias is replaced.",
+    ),
+});
+
+const browserLoginOptions = loginOptions.extend({
+  key: z
+    .string()
+    .regex(/^0x[a-fA-F0-9]{40}$/)
+    .optional()
+    .describe(
+      "Local key that proves this agent in a browser login, and becomes the treasury signer " +
+        "if the person creates a workspace. Required when several local keys are saved; " +
+        "a new key is created when none is.",
+    ),
+  clientName: z
+    .string()
+    .max(64)
+    .optional()
+    .describe(
+      "Name shown to the person on the approval page. Defaults to `Splits CLI on <hostname>`.",
+    ),
+});
+
 auth.command("login", {
   description:
     "Save a Splits API key as a workspace in the local config (~/.splits/config.json, mode 0600) " +
-    "and make it the active workspace. The key is checked against the API first, and the " +
-    "workspace is named after its org unless --name is given; logging in again to the same org " +
-    "refreshes that workspace. Other workspaces and local keys are never removed. " +
-    "Prefer stdin to avoid leaking the key to shell history or tool-call transcripts: " +
-    "  `echo $SPLITS_API_KEY | splits auth login`. " +
+    "and make it the active workspace. Without --api-key or stdin, starts a browser login: " +
+    "it opens an approval page where the person connects an existing workspace or creates a new one, " +
+    "waits up to 10 minutes for the approval, and saves the key it receives. The key never appears " +
+    "in the output. With a key, the key is checked against the API first. The workspace is named " +
+    "after its org unless --name is given; logging in again to the same org refreshes that workspace. " +
+    "Other workspaces and local keys are never removed. Under MCP, use `auth login-start` and " +
+    "`auth login-status` instead. " +
     "Saved keys are only used when the SPLITS_API_KEY env var is not set — env always wins.",
   env: authEnv,
-  options: z.object({
+  options: browserLoginOptions.extend({
     apiKey: z
       .string()
       .optional()
       .describe(
         "API key value. Refused under MCP mode; prefer stdin for secrets.",
-      ),
-    apiUrl: z
-      .string()
-      .url()
-      .optional()
-      .describe(
-        "Optional API base URL override to persist alongside the key (e.g. staging). " +
-          "Defaults to SPLITS_API_URL when that is set, so the saved URL is the one the key was checked against.",
-      ),
-    name: z
-      .string()
-      .optional()
-      .describe(
-        "Workspace alias. Defaults to the org name in lowercase with dashes. " +
-          "An existing workspace with this alias is replaced.",
       ),
   }),
   async run({ env, options }) {
@@ -338,21 +464,54 @@ auth.command("login", {
           "Set SPLITS_API_KEY in the MCP server's environment, or run `auth login` outside MCP.",
       );
     }
-    if (options.name !== undefined) assertWorkspaceAlias(options.name);
-
-    let value = options.apiKey ?? (await readStdin());
-    value = value.trim();
-    if (value.length === 0) {
+    if (options.apiKey === undefined && mcpMode()) {
       throw new Error(
-        "No API key provided. Pass --api-key, pipe via stdin, or export SPLITS_API_KEY.",
+        "In MCP mode, start a browser login with `auth login-start` and check it with " +
+          "`auth login-status`, or set SPLITS_API_KEY in the MCP server's environment.",
       );
     }
+    if (options.name !== undefined) assertWorkspaceAlias(options.name);
 
-    const apiUrl =
-      options.apiUrl ??
-      (env.SPLITS_API_URL !== undefined && env.SPLITS_API_URL.length > 0
-        ? env.SPLITS_API_URL
-        : undefined);
+    const apiUrl = resolveLoginApiUrl(env, options.apiUrl);
+    const value = (options.apiKey ?? (await readStdin())).trim();
+
+    if (value.length === 0) {
+      const { account, keyCreated } = await loginSigner(options.key);
+      const started = await startAgentLogin({
+        apiUrl: apiUrl ?? DEFAULT_API_URL,
+        signer: account,
+        clientName: options.clientName ?? defaultClientName(),
+      });
+      process.stderr.write(
+        `Approve this login in your browser:\n  ${started.url}\n` +
+          `Waiting for approval until ${started.expiresAt}...\n`,
+      );
+      openInBrowser(started.url);
+
+      const result = await waitForAgentLogin({
+        poll: () =>
+          pollAgentLogin({
+            apiUrl: apiUrl ?? DEFAULT_API_URL,
+            requestId: started.requestId,
+            codeVerifier: started.codeVerifier,
+          }),
+        expiresAt: started.expiresAt,
+        sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      });
+      if (result.status !== "approved") {
+        throw new Error(LOGIN_OUTCOME_MESSAGES[result.status]);
+      }
+
+      const saved = await saveApprovedLogin({
+        grant: result,
+        apiUrl,
+        name: options.name,
+        signerAddress: account.address,
+      });
+      if (saved.diagram !== null) process.stderr.write(`${saved.diagram}\n`);
+      warnIfEnvKeySet(env);
+      return { ...saved, keyCreated, signerAddress: account.address };
+    }
 
     const { data: org } = await httpRequest<{
       data: { orgId: string; orgName: string | null };
@@ -370,12 +529,7 @@ auth.command("login", {
       apiUrl,
     });
 
-    if (env.SPLITS_API_KEY !== undefined && env.SPLITS_API_KEY.length > 0) {
-      process.stderr.write(
-        "Warning: SPLITS_API_KEY env var is set and will take precedence. " +
-          "Saved workspaces are used only when the env var is unset.\n",
-      );
-    }
+    warnIfEnvKeySet(env);
 
     return {
       saved: true,
@@ -386,6 +540,99 @@ auth.command("login", {
       apiUrl: apiUrl ?? null,
       path: CONFIG_FILE_PATH,
     };
+  },
+});
+
+auth.command("login-start", {
+  description:
+    "Start a browser login without waiting for it, for MCP clients and agents that cannot block. " +
+    "Proves a local key (creating one when none is saved), opens the approval page, and returns " +
+    "its URL. Ask the person to open the URL, log in and approve (connect a workspace or create one), " +
+    "then call `auth login-status`. The request expires after 10 minutes.",
+  env: authEnv,
+  options: browserLoginOptions,
+  async run({ env, options }) {
+    if (options.name !== undefined) assertWorkspaceAlias(options.name);
+    const apiUrl = resolveLoginApiUrl(env, options.apiUrl);
+    const { account, keyCreated } = await loginSigner(options.key);
+    const started = await startAgentLogin({
+      apiUrl: apiUrl ?? DEFAULT_API_URL,
+      signer: account,
+      clientName: options.clientName ?? defaultClientName(),
+    });
+    await savePendingLogin({
+      requestId: started.requestId,
+      codeVerifier: started.codeVerifier,
+      url: started.url,
+      apiUrl: apiUrl ?? null,
+      expiresAt: started.expiresAt,
+      name: options.name ?? null,
+      signerAddress: account.address,
+      startedAt: new Date().toISOString(),
+    });
+    openInBrowser(started.url);
+    return {
+      requestId: started.requestId,
+      url: started.url,
+      expiresAt: started.expiresAt,
+      keyCreated,
+      signerAddress: account.address,
+      next: "Ask the person to open the URL and approve, then run `splits auth login-status`.",
+    };
+  },
+});
+
+auth.command("login-status", {
+  description:
+    "Check a browser login started by `auth login-start`, once. While it is pending, returns the URL " +
+    "again. Once approved, saves the API key as a workspace, makes it active, and returns the " +
+    "workspace (never the key). Denied and expired logins are returned as such and forgotten.",
+  env: authEnv,
+  options: z.object({
+    requestId: z
+      .string()
+      .optional()
+      .describe("Login to check. Defaults to the most recent pending login."),
+  }),
+  async run({ env, options }) {
+    const pending = await loadPendingLogin(options.requestId);
+    if (pending === null) {
+      throw new Error(
+        "No pending browser login. Start one with `splits auth login-start`.",
+      );
+    }
+
+    const result = await pollAgentLogin({
+      apiUrl: pending.apiUrl ?? DEFAULT_API_URL,
+      requestId: pending.requestId,
+      codeVerifier: pending.codeVerifier,
+    });
+    if (result.status === "pending") {
+      return {
+        status: result.status,
+        requestId: pending.requestId,
+        url: pending.url,
+        expiresAt: pending.expiresAt,
+      };
+    }
+
+    await removePendingLogin(pending.requestId);
+    if (result.status !== "approved") {
+      return {
+        status: result.status,
+        requestId: pending.requestId,
+        message: LOGIN_OUTCOME_MESSAGES[result.status],
+      };
+    }
+
+    const saved = await saveApprovedLogin({
+      grant: result,
+      apiUrl: pending.apiUrl ?? undefined,
+      name: pending.name ?? undefined,
+      signerAddress: pending.signerAddress,
+    });
+    warnIfEnvKeySet(env);
+    return { status: result.status, requestId: pending.requestId, ...saved };
   },
 });
 

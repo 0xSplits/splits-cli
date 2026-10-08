@@ -58,6 +58,16 @@ const WorkspaceSchema = z.object({
   savedAt: z.string(),
 });
 
+const PendingLoginSchema = z.object({
+  codeVerifier: z.string().min(1),
+  url: z.string().url(),
+  apiUrl: z.string().url().nullable(),
+  expiresAt: z.string(),
+  name: z.string().nullable(),
+  signerAddress: z.string().regex(HEX_ADDRESS_RE),
+  startedAt: z.string(),
+});
+
 const ConfigV2Schema = z.object({
   version: z.literal(2),
   activeWorkspace: z.string().nullable(),
@@ -69,6 +79,7 @@ const ConfigV2Schema = z.object({
       privateKey: z.string().regex(HEX_PRIVATE_KEY_RE),
     }),
   ),
+  pendingLogins: z.record(z.string(), PendingLoginSchema).optional(),
 });
 
 type Config = z.infer<typeof ConfigV2Schema>;
@@ -510,3 +521,52 @@ export const loadLocalKey = async (address?: string): Promise<SavedKey | null> =
 // Short-form address is self-documenting and collision-free.
 export const defaultKeyName = (address: string): string =>
   `${address.slice(0, 6)}…${address.slice(-4)}`;
+
+
+export type PendingLogin = z.infer<typeof PendingLoginSchema> & {
+  requestId: string;
+};
+
+const isExpired = (login: { expiresAt: string }, now: number): boolean =>
+  Date.parse(login.expiresAt) <= now;
+
+const setPendingLogins = (
+  config: Config,
+  logins: Record<string, z.infer<typeof PendingLoginSchema>>,
+): void => {
+  const now = Date.now();
+  const live = Object.fromEntries(
+    Object.entries(logins).filter(([, login]) => !isExpired(login, now)),
+  );
+  if (Object.keys(live).length === 0) delete config.pendingLogins;
+  else config.pendingLogins = live;
+};
+
+export const savePendingLogin = ({
+  requestId,
+  ...login
+}: PendingLogin): Promise<void> =>
+  updateConfig((config) => {
+    setPendingLogins(config, { ...config.pendingLogins, [requestId]: login });
+  });
+
+export const loadPendingLogin = async (
+  requestId?: string,
+): Promise<PendingLogin | null> => {
+  const config = await readConfig();
+  const now = Date.now();
+  const live = Object.entries(config.pendingLogins ?? {})
+    .filter(([, login]) => !isExpired(login, now))
+    .map(([id, login]) => ({ requestId: id, ...login }));
+  if (requestId !== undefined) {
+    return live.find((login) => login.requestId === requestId) ?? null;
+  }
+  const [latest] = live.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+  return latest ?? null;
+};
+
+export const removePendingLogin = (requestId: string): Promise<void> =>
+  updateConfig((config) => {
+    const { [requestId]: _removed, ...rest } = config.pendingLogins ?? {};
+    setPendingLogins(config, rest);
+  });
