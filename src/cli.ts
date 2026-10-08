@@ -2190,7 +2190,7 @@ create.command("transfer", {
     chainId: z
       .number()
       .describe(
-        "The chain ID where the smart account is deployed (e.g., 1 for Ethereum, 8453 for Base)",
+        "The chain ID where the recipient receives the token (e.g., 1 for Ethereum, 8453 for Base)",
       ),
     recipient: z
       .string()
@@ -2201,7 +2201,9 @@ create.command("transfer", {
     token: z
       .string()
       .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid token address")
-      .describe("The token contract address to transfer"),
+      .describe(
+        "The token the recipient receives. An Earn token address sends the Earn position itself and is allowed only to accounts in this workspace. To pay with a different token, such as from Earn, pass it as --source-token",
+      ),
     amount: z
       .string()
       .regex(
@@ -2209,7 +2211,20 @@ create.command("transfer", {
         "Must be a positive decimal number (no scientific notation, no negatives, no leading zeros)",
       )
       .describe(
-        "The amount to transfer in human-readable units (e.g., '100' for 100 USDC, '0.5' for 0.5 ETH)",
+        "The amount of --token the recipient receives, in human-readable units (e.g., '100' for 100 USDC, '0.5' for 0.5 ETH). With --source-token, the account spends whatever amount of it that costs",
+      ),
+    sourceToken: z
+      .string()
+      .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid token address")
+      .optional()
+      .describe(
+        "Optional token to pay with, like \"Pay with\" in the web app. Defaults to --token, a direct transfer. Any other token the account holds is swapped, or bridged when --source-chain-id differs. An Earn token pays from that Earn position",
+      ),
+    sourceChainId: z
+      .number()
+      .optional()
+      .describe(
+        "Optional chain of --source-token. Defaults to --chain-id. A different chain bridges the payment to --chain-id",
       ),
     memo: z
       .string()
@@ -2256,6 +2271,12 @@ create.command("transfer", {
       recipient: options.recipient,
       token: options.token,
       amount: options.amount,
+      ...(options.sourceToken !== undefined && {
+        sourceToken: options.sourceToken,
+      }),
+      ...(options.sourceChainId !== undefined && {
+        sourceChainId: options.sourceChainId,
+      }),
       ...(options.memo !== undefined && { memo: options.memo }),
       ...(properties !== undefined && { properties }),
       ...(options.name !== undefined && { name: options.name }),
