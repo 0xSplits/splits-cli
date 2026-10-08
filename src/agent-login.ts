@@ -102,8 +102,8 @@ export const pollAgentLogin = async ({
   try {
     const { data } = await httpRequest<{ data: AgentLoginPoll }>(
       { apiKey: null, apiUrl },
-      `/auth/agent-login/requests/${encodeURIComponent(requestId)}?codeVerifier=${encodeURIComponent(codeVerifier)}`,
-      { requireAuth: false },
+      `/auth/agent-login/requests/${encodeURIComponent(requestId)}/poll`,
+      { method: "POST", requireAuth: false, body: { codeVerifier } },
     );
     return data;
   } catch (error) {
