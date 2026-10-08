@@ -2270,6 +2270,8 @@ create.command("transfer", {
   },
 });
 
+const AUTO_EARN_PAUSE_SECONDS = [300, 3600, 86400];
+
 const earnProposalOptions = workspaceOption.extend({
   account: z
     .string()
@@ -2377,6 +2379,9 @@ create.command("earn-withdraw", {
     pauseAutoEarnSeconds: z
       .number()
       .int()
+      .refine((seconds) => AUTO_EARN_PAUSE_SECONDS.includes(seconds), {
+        message: `Must be one of ${AUTO_EARN_PAUSE_SECONDS.join(", ")}`,
+      })
       .optional()
       .describe(
         "Pause auto-earn on this account and chain for 300, 3600, or 86400 seconds once the withdrawal executes, so the asset is not swept back into the vault. Defaults to 300 when auto-earn is on for the account and chain, and is ignored when it is off",
