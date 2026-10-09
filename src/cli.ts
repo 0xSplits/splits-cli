@@ -1042,7 +1042,9 @@ workspace.command("create", {
     "new workspace and made active; the key never appears in the output. " +
     "Outside MCP the command waits up to 10 minutes for the approval and prints a diagram of the accounts. " +
     "Under MCP it returns the approval URL without waiting: ask the person to approve, then call " +
-    "`auth login-status`, which saves the workspace and returns the diagram.",
+    "`auth login-status`, which saves the workspace and returns the diagram. " +
+    "Use this rather than `org create` when this agent will work in the new workspace: `org create` only " +
+    "emails the person a setup link and gives this agent no API key and no signer.",
   env: authEnv,
   options: browserLoginOptions.omit({ name: true }).extend({
     name: z
