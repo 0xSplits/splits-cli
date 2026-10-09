@@ -439,9 +439,11 @@ const browserLoginOptions = loginOptions.extend({
     .min(1)
     .max(64)
     .describe(
-      "Your own name as the agent asking for access, the way the person knows you " +
-        "(for example `Claude Code`, `Codex` or `Cursor`). Shown to the person on the approval " +
-        "page and used in the API key's name.",
+      "The name of the app the person is using to talk to you, as they would recognise it: " +
+        "for example `Claude Code`, `Claude Desktop`, `Codex`, `Cursor` or `ChatGPT`. " +
+        "Use the product name, not the model name (not \"Claude Opus\"), not the person's name, " +
+        "and not \"Splits CLI\". The person sees it on the approval page before approving, " +
+        "and the API key is named after it.",
     ),
 });
 
@@ -461,9 +463,12 @@ auth.command("login", {
     clientName: browserLoginOptions.shape.clientName
       .optional()
       .describe(
-        "Required for a browser login: your own name as the agent asking for access " +
-          "(for example `Claude Code`, `Codex` or `Cursor`). Shown on the approval page " +
-          "and used in the API key's name. Ignored when an API key is given.",
+        "Required for a browser login, ignored when an API key is given. " +
+          "The name of the app the person is using to talk to you, as they would recognise it: " +
+          "for example `Claude Code`, `Claude Desktop`, `Codex`, `Cursor` or `ChatGPT`. " +
+          "Use the product name, not the model name (not \"Claude Opus\"), not the person's name, " +
+          "and not \"Splits CLI\". The person sees it on the approval page before approving, " +
+          "and the API key is named after it.",
       ),
     apiKey: z
       .string()
@@ -573,7 +578,8 @@ auth.command("login", {
 auth.command("login-start", {
   description:
     "Start a browser login without waiting for it, for MCP clients and agents that cannot block. " +
-    "Pass clientName with your own name as the agent (for example Claude Code) so the person knows who is asking. " +
+    "Pass clientName with the product name of the app the person is using to talk to you " +
+    "(for example Claude Code), not the model name. " +
     "Proves a local key (creating one when none is saved), opens the approval page, and returns " +
     "its URL. Ask the person to open the URL, log in and approve (connect a workspace or create one), " +
     "then call `auth login-status`. The request expires after 10 minutes.",
