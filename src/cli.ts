@@ -613,7 +613,7 @@ auth.command("login-start", {
       keyCreated,
       signerAddress: account.address,
       next:
-        "Ask the person to open the URL, check that the page shows the agent key signerAddress, " +
+        `Ask the person to open the URL, check that the page shows the agent key ${account.address}, ` +
         "and approve. Then run `splits auth login-status`.",
     };
   },
