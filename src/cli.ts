@@ -516,6 +516,7 @@ auth.command("login", {
       });
       process.stderr.write(
         `Approve this login in your browser:\n  ${started.url}\n` +
+          `The page should show this agent key: ${account.address}\n` +
           `Waiting for approval until ${started.expiresAt}...\n`,
       );
       openInBrowser(started.url);
@@ -611,7 +612,9 @@ auth.command("login-start", {
       expiresAt: started.expiresAt,
       keyCreated,
       signerAddress: account.address,
-      next: "Ask the person to open the URL and approve, then run `splits auth login-status`.",
+      next:
+        "Ask the person to open the URL, check that the page shows the agent key signerAddress, " +
+        "and approve. Then run `splits auth login-status`.",
     };
   },
 });
