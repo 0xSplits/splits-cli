@@ -2479,7 +2479,7 @@ create.command("transfer", {
     chainId: z
       .number()
       .describe(
-        "The chain ID where the smart account is deployed (e.g., 1 for Ethereum, 8453 for Base)",
+        "The chain ID where the recipient receives the token (e.g., 1 for Ethereum, 8453 for Base)",
       ),
     recipient: z
       .string()
@@ -2490,7 +2490,9 @@ create.command("transfer", {
     token: z
       .string()
       .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid token address")
-      .describe("The token contract address to transfer"),
+      .describe(
+        "The token the recipient receives. An Earn token address sends the Earn position itself and is allowed only to accounts in this workspace. To pay with a different token, such as from Earn, pass it as --source-token",
+      ),
     amount: z
       .string()
       .regex(
@@ -2498,7 +2500,20 @@ create.command("transfer", {
         "Must be a positive decimal number (no scientific notation, no negatives, no leading zeros)",
       )
       .describe(
-        "The amount to transfer in human-readable units (e.g., '100' for 100 USDC, '0.5' for 0.5 ETH)",
+        "The amount of --token the recipient receives, in human-readable units (e.g., '100' for 100 USDC, '0.5' for 0.5 ETH). With --source-token, the account spends whatever amount of it that costs",
+      ),
+    sourceToken: z
+      .string()
+      .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid token address")
+      .optional()
+      .describe(
+        "Optional token to pay with, like \"Pay with\" in the web app. Defaults to --token, a direct transfer. Any other token the account holds is swapped, or bridged when --source-chain-id differs. An Earn token pays from that Earn position",
+      ),
+    sourceChainId: z
+      .number()
+      .optional()
+      .describe(
+        "Optional chain of --source-token. Defaults to --chain-id. A different chain bridges the payment to --chain-id",
       ),
     memo: z
       .string()
@@ -2545,6 +2560,12 @@ create.command("transfer", {
       recipient: options.recipient,
       token: options.token,
       amount: options.amount,
+      ...(options.sourceToken !== undefined && {
+        sourceToken: options.sourceToken,
+      }),
+      ...(options.sourceChainId !== undefined && {
+        sourceChainId: options.sourceChainId,
+      }),
       ...(options.memo !== undefined && { memo: options.memo }),
       ...(properties !== undefined && { properties }),
       ...(options.name !== undefined && { name: options.name }),
@@ -2556,6 +2577,129 @@ create.command("transfer", {
       method: "POST",
       body,
     });
+  },
+});
+
+const AUTO_EARN_PAUSE_SECONDS = [300, 3600, 86400];
+
+const earnProposalOptions = workspaceOption.extend({
+  account: z
+    .string()
+    .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid Ethereum address")
+    .describe(
+      "The smart account address to create the proposal from (0x-prefixed, 40 hex chars)",
+    ),
+  chainId: z
+    .number()
+    .describe(
+      "The chain ID where the smart account is deployed and the vault lives (e.g., 1 for Ethereum, 8453 for Base)",
+    ),
+  asset: z
+    .string()
+    .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid token address")
+    .describe("The underlying asset of the vault (e.g. the USDC address)"),
+  amount: z
+    .string()
+    .regex(
+      /^(0|[1-9]\d*)(\.\d+)?$/,
+      "Must be a positive decimal number (no scientific notation, no negatives, no leading zeros)",
+    )
+    .describe(
+      "The amount in human-readable asset units (e.g., '100' for 100 USDC)",
+    ),
+  memo: z
+    .string()
+    .max(500)
+    .optional()
+    .describe("Optional memo for the transaction (max 500 chars)"),
+  properties: propertiesOptionSchema
+    .optional()
+    .describe(
+      'Optional custom JSON metadata. Total minified ≤ 500 chars. Used as the base; any --property overlays are applied on top. To load from a file, use shell substitution: --properties "$(cat props.json)"',
+    ),
+  property: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "String key/value overlays for properties; repeatable. Splits on the first '='. Example: --property invoice=INV-42",
+    ),
+});
+
+const createEarnProposal = async ({
+  env,
+  action,
+  options,
+}: {
+  env: Awaited<ReturnType<typeof withWorkspace>>;
+  action: "deposit" | "withdraw";
+  options: z.infer<typeof earnProposalOptions> & {
+    vault?: string;
+    pauseAutoEarnSeconds?: number;
+  };
+}) => {
+  const properties =
+    options.properties !== undefined || options.property?.length
+      ? applyPropertyOverlays(
+          parsePropertiesOption(options.properties) ?? {},
+          options.property,
+        )
+      : undefined;
+  const body = {
+    account: options.account,
+    chainId: options.chainId,
+    action,
+    asset: options.asset,
+    amount: options.amount,
+    ...(options.vault !== undefined && { vault: options.vault }),
+    ...(options.pauseAutoEarnSeconds !== undefined && {
+      pauseAutoEarnSeconds: options.pauseAutoEarnSeconds,
+    }),
+    ...(options.memo !== undefined && { memo: options.memo }),
+    ...(properties !== undefined && { properties }),
+  } satisfies Record<string, unknown>;
+  return apiRequest<{ data?: unknown }>(env, "/proposals/earn", {
+    method: "POST",
+    body,
+  });
+};
+
+create.command("earn-deposit", {
+  description:
+    "Create a proposal, for a human signer to approve, that deposits an asset from a smart account into its Earn vault. Specify amount in human-readable asset units (e.g. '100' for 100 USDC). Returns the proposal with the previewed vault shares and a signUrl.",
+  env: authEnv,
+  options: earnProposalOptions,
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
+    return createEarnProposal({ env, action: "deposit", options });
+  },
+});
+
+create.command("earn-withdraw", {
+  description:
+    "Create a proposal, for a human signer to approve, that withdraws an asset from an Earn vault back to the smart account. Specify amount in human-readable asset units (e.g. '100' for 100 USDC), not vault shares. Returns the proposal with the previewed vault shares and a signUrl.",
+  env: authEnv,
+  options: earnProposalOptions.extend({
+    vault: z
+      .string()
+      .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid vault address")
+      .optional()
+      .describe(
+        "The Earn vault to withdraw from. Defaults to the vault that accepts deposits for this asset on this chain. Pass it to withdraw from a legacy vault, which accepts withdrawals only",
+      ),
+    pauseAutoEarnSeconds: z
+      .number()
+      .int()
+      .refine((seconds) => AUTO_EARN_PAUSE_SECONDS.includes(seconds), {
+        message: `Must be one of ${AUTO_EARN_PAUSE_SECONDS.join(", ")}`,
+      })
+      .optional()
+      .describe(
+        "Pause auto-earn on this account and chain for 300, 3600, or 86400 seconds once the withdrawal executes, so the asset is not swept back into the vault. Defaults to 300 when auto-earn is on for the account and chain, and is ignored when it is off",
+      ),
+  }),
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
+    return createEarnProposal({ env, action: "withdraw", options });
   },
 });
 
