@@ -6,9 +6,43 @@ import {
   type AgentLoginPoll,
   createPkcePair,
   pollIntervalMs,
+  resolveLoginInput,
   waitForAgentLogin,
 } from "./agent-login.js";
 import { SplitsApiError } from "./http.js";
+
+describe("auth login input", () => {
+  it("logs in through the browser when no key is given at all", () => {
+    assert.deepEqual(resolveLoginInput({ flag: undefined, stdin: "" }), {
+      kind: "browser",
+    });
+  });
+
+  it("uses a key from the flag or from stdin", () => {
+    assert.deepEqual(resolveLoginInput({ flag: " sk_a ", stdin: "" }), {
+      kind: "key",
+      apiKey: "sk_a",
+    });
+    assert.deepEqual(resolveLoginInput({ flag: undefined, stdin: "sk_b\n" }), {
+      kind: "key",
+      apiKey: "sk_b",
+    });
+  });
+
+  it("refuses an empty --api-key instead of starting a browser login", () => {
+    assert.throws(
+      () => resolveLoginInput({ flag: "", stdin: "" }),
+      /API key on --api-key or stdin is empty/,
+    );
+  });
+
+  it("refuses a blank value piped on stdin", () => {
+    assert.throws(
+      () => resolveLoginInput({ flag: undefined, stdin: "\n" }),
+      /API key on --api-key or stdin is empty/,
+    );
+  });
+});
 
 describe("browser login", () => {
   it("derives the S256 challenge from the verifier", () => {

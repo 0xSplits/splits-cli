@@ -522,7 +522,6 @@ export const loadLocalKey = async (address?: string): Promise<SavedKey | null> =
 export const defaultKeyName = (address: string): string =>
   `${address.slice(0, 6)}…${address.slice(-4)}`;
 
-
 export type PendingLogin = z.infer<typeof PendingLoginSchema> & {
   requestId: string;
 };

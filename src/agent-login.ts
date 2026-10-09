@@ -146,21 +146,56 @@ export const waitForAgentLogin = async ({
   return { status: "expired" };
 };
 
+const LOCAL_HOSTNAMES = ["localhost", "127.0.0.1", "[::1]"];
+
+const isBrowserSafeUrl = (url: string): boolean => {
+  try {
+    const { protocol, hostname } = new URL(url);
+    return (
+      protocol === "https:" ||
+      (protocol === "http:" && LOCAL_HOSTNAMES.includes(hostname))
+    );
+  } catch {
+    return false;
+  }
+};
+
 const browserCommand = (url: string): [string, string[]] => {
   if (process.platform === "darwin") return ["open", [url]];
-  if (process.platform === "win32") return ["cmd", ["/c", "start", "", url]];
+  if (process.platform === "win32") {
+    return ["rundll32", ["url.dll,FileProtocolHandler", url]];
+  }
   return ["xdg-open", [url]];
 };
 
 export const openInBrowser = (url: string): void => {
+  if (!isBrowserSafeUrl(url)) return;
   const [command, args] = browserCommand(url);
   try {
     const child = spawn(command, args, { detached: true, stdio: "ignore" });
     child.on("error", () => {});
     child.unref();
-  } catch {
-    return;
+  } catch {}
+};
+
+export type LoginInput = { kind: "key"; apiKey: string } | { kind: "browser" };
+
+export const resolveLoginInput = ({
+  flag,
+  stdin,
+}: {
+  flag: string | undefined;
+  stdin: string;
+}): LoginInput => {
+  if (flag === undefined && stdin.length === 0) return { kind: "browser" };
+  const apiKey = (flag ?? stdin).trim();
+  if (apiKey.length === 0) {
+    throw new Error(
+      "The API key on --api-key or stdin is empty. Pass a key, or run `splits auth login` with no key " +
+        "to log in through the browser.",
+    );
   }
+  return { kind: "key", apiKey };
 };
 
 export const describeCreatedWorkspace = ({

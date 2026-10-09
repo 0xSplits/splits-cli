@@ -11,6 +11,7 @@ import {
   describeCreatedWorkspace,
   openInBrowser,
   pollAgentLogin,
+  resolveLoginInput,
   startAgentLogin,
   waitForAgentLogin,
 } from "./agent-login.js";
@@ -123,7 +124,9 @@ const STDIN_TIMEOUT_MS = 5_000;
 // rather than hanging. Under a non-TTY non-MCP path (cron, CI with stdin from
 // /dev/null, orphaned subprocess), time out after STDIN_TIMEOUT_MS so a wedged
 // parent can't hang the CLI indefinitely.
-const readStdin = async (): Promise<string> => {
+const readStdin = async ({
+  emptyOnTimeout = false,
+}: { emptyOnTimeout?: boolean } = {}): Promise<string> => {
   if (process.stdin.isTTY) return "";
   if (mcpMode()) {
     throw new Error(
@@ -142,15 +145,21 @@ const readStdin = async (): Promise<string> => {
     return Buffer.concat(chunks).toString("utf-8");
   })();
 
-  const timeout = new Promise<never>((_, reject) =>
+  const timeout = new Promise<string>((resolve, reject) =>
     setTimeout(
-      () =>
+      () => {
+        if (emptyOnTimeout) {
+          process.stdin.destroy();
+          resolve("");
+          return;
+        }
         reject(
           new Error(
             `No input on stdin after ${STDIN_TIMEOUT_MS / 1000}s. ` +
               `Pipe a value (e.g. \`echo "$SECRET" | splits auth login\`).`,
           ),
-        ),
+        );
+      },
       STDIN_TIMEOUT_MS,
     ).unref(),
   );
@@ -343,13 +352,13 @@ const loginSigner = async (address: string | undefined) => {
   return { account, keyCreated: true };
 };
 
-
-const LOGIN_OUTCOME_MESSAGES = {
+const LOGIN_OUTCOME_MESSAGE_BY_STATUS = {
   denied: "The login request was denied in the browser.",
   expired:
     "The login request expired or was not found. Start a new one with `splits auth login`.",
   consumed:
-    "Another process already collected the API key for this login. Start a new one with `splits auth login`.",
+    "The API key for this login was already collected, possibly by this command after a network error. " +
+      "Start a new one with `splits auth login`.",
 } as const;
 
 const saveApprovedLogin = async ({
@@ -423,6 +432,13 @@ const loginOptions = z.object({
     ),
 });
 
+const CLIENT_NAME_DESCRIPTION =
+  "The name of the app the person is using to talk to you, as they would recognise it: " +
+  "for example `Claude Code`, `Claude Desktop`, `Codex`, `Cursor` or `ChatGPT`. " +
+  "Use the product name, not the model name (not \"Claude Opus\"), not the person's name, " +
+  "and not \"Splits CLI\". The person sees it on the approval page before approving, " +
+  "and the API key is named after it.";
+
 const browserLoginOptions = loginOptions.extend({
   key: z
     .string()
@@ -439,11 +455,7 @@ const browserLoginOptions = loginOptions.extend({
     .min(1)
     .max(64)
     .describe(
-      "The name of the app the person is using to talk to you, as they would recognise it: " +
-        "for example `Claude Code`, `Claude Desktop`, `Codex`, `Cursor` or `ChatGPT`. " +
-        "Use the product name, not the model name (not \"Claude Opus\"), not the person's name, " +
-        "and not \"Splits CLI\". The person sees it on the approval page before approving, " +
-        "and the API key is named after it.",
+      CLIENT_NAME_DESCRIPTION,
     ),
 });
 
@@ -464,11 +476,7 @@ auth.command("login", {
       .optional()
       .describe(
         "Required for a browser login, ignored when an API key is given. " +
-          "The name of the app the person is using to talk to you, as they would recognise it: " +
-          "for example `Claude Code`, `Claude Desktop`, `Codex`, `Cursor` or `ChatGPT`. " +
-          "Use the product name, not the model name (not \"Claude Opus\"), not the person's name, " +
-          "and not \"Splits CLI\". The person sees it on the approval page before approving, " +
-          "and the API key is named after it.",
+          CLIENT_NAME_DESCRIPTION,
       ),
     apiKey: z
       .string()
@@ -478,30 +486,25 @@ auth.command("login", {
       ),
   }),
   async run({ env, options }) {
-    if (options.apiKey !== undefined && mcpMode()) {
+    if (mcpMode()) {
       throw new Error(
-        "--api-key flag is refused in MCP mode (`--mcp` or SPLITS_MCP_MODE=1). " +
-          "Set SPLITS_API_KEY in the MCP server's environment, or run `auth login` outside MCP.",
-      );
-    }
-    if (options.apiKey === undefined && mcpMode()) {
-      throw new Error(
-        "In MCP mode, start a browser login with `auth login-start` and check it with " +
-          "`auth login-status`, or set SPLITS_API_KEY in the MCP server's environment.",
+        "`auth login` does not run in MCP mode (`--mcp` or SPLITS_MCP_MODE=1), and API keys are never " +
+          "passed to MCP tools. Log in through the browser with `auth login-start` and `auth login-status`, " +
+          "or set SPLITS_API_KEY in the MCP server's environment.",
       );
     }
     if (options.name !== undefined) assertWorkspaceAlias(options.name);
 
     const apiUrl = resolveLoginApiUrl(env, options.apiUrl);
-    const input = options.apiKey ?? (await readStdin());
-    const value = input.trim();
-    if (input.length > 0 && value.length === 0) {
-      throw new Error(
-        "The API key on --api-key or stdin is empty. Pipe a key, or run `splits auth login` with no input to log in through the browser.",
-      );
-    }
+    const input = resolveLoginInput({
+      flag: options.apiKey,
+      stdin:
+        options.apiKey === undefined
+          ? await readStdin({ emptyOnTimeout: true })
+          : "",
+    });
 
-    if (value.length === 0) {
+    if (input.kind === "browser") {
       if (options.clientName === undefined) {
         throw new Error(
           "A browser login needs --client-name with the name of the agent asking for access, " +
@@ -532,7 +535,7 @@ auth.command("login", {
         sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       });
       if (result.status !== "approved") {
-        throw new Error(LOGIN_OUTCOME_MESSAGES[result.status]);
+        throw new Error(LOGIN_OUTCOME_MESSAGE_BY_STATUS[result.status]);
       }
 
       const saved = await saveApprovedLogin({
@@ -546,6 +549,7 @@ auth.command("login", {
       return { ...saved, keyCreated, signerAddress: account.address };
     }
 
+    const value = input.apiKey;
     const { data: org } = await httpRequest<{
       data: { orgId: string; orgName: string | null };
     }>(
@@ -658,7 +662,7 @@ auth.command("login-status", {
       return {
         status: result.status,
         requestId: pending.requestId,
-        message: LOGIN_OUTCOME_MESSAGES[result.status],
+        message: LOGIN_OUTCOME_MESSAGE_BY_STATUS[result.status],
       };
     }
 
