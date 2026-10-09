@@ -441,7 +441,8 @@ const browserLoginOptions = loginOptions.extend({
     .max(64)
     .optional()
     .describe(
-      "Name shown to the person on the approval page. Defaults to `Splits CLI on <hostname>`.",
+      "Name of the agent or app asking for access, for example `Claude Code`. Shown to the person " +
+        "on the approval page and used in the API key's name. Defaults to `Splits CLI on <hostname>`.",
     ),
 });
 
@@ -560,6 +561,7 @@ auth.command("login", {
 auth.command("login-start", {
   description:
     "Start a browser login without waiting for it, for MCP clients and agents that cannot block. " +
+    "Pass clientName with your own name so the person knows who is asking. " +
     "Proves a local key (creating one when none is saved), opens the approval page, and returns " +
     "its URL. Ask the person to open the URL, log in and approve (connect a workspace or create one), " +
     "then call `auth login-status`. The request expires after 10 minutes.",
