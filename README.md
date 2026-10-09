@@ -35,6 +35,14 @@ splits auth login-start --client-name "Claude Code"   # returns the approval URL
 splits auth login-status                              # checks once; saves the workspace once approved
 ```
 
+**New workspace** for an agent that has none yet:
+
+```sh
+splits workspace create --name "Acme" --chain-ids 8453,1 --client-name "Claude Code"
+```
+
+The same browser login, with the approval page opened on its create tab and prefilled with the name and chains (`--chain-ids` defaults to the chains a new workspace gets in the app). The person approves as the owner. Their login email is the only signer of the root account, which owns the treasury; this CLI's local key is the only signer of the treasury, which is the deposit address on every chosen chain. The key is saved as a new active workspace and a diagram of the accounts is printed. Under MCP the tool returns the approval URL without waiting; finish with `auth login-status`.
+
 Or bring an API key from [Splits Settings](https://app.splits.org/settings/team/api-keys/). Two options:
 
 **Environment variable** (preferred for CI and headless contexts):
@@ -341,6 +349,7 @@ The MCP server exposes these tools:
 - `auth_whoami` — Show org, workspace, API key source, and local signing keys
 - `auth_login` / `auth_logout` — Save or remove a workspace (stdin-preferred; `--api-key` flag refused under MCP)
 - `auth_login-start` / `auth_login-status` — Log in through a browser approval without the API key passing through the conversation
+- `workspace_create` — Create a new workspace through a browser approval: the person's email holds the root, this agent's key the treasury
 - `auth_workspaces` / `auth_use` — List saved workspaces, switch the active one
 - `auth_create_key` / `auth_delete_key` / `auth_import_key` — Manage local EOA signing keys
 
