@@ -417,6 +417,42 @@ describe("local keys", () => {
   });
 });
 
+describe("pending browser logins", () => {
+  beforeEach(resetConfig);
+
+  it("returns the most recent live login when no request id is given", async () => {
+    await config.savePendingLogin(pendingLogin("older", 1));
+    await config.savePendingLogin(pendingLogin("newer", 2));
+
+    assert.equal((await config.loadPendingLogin())?.requestId, "newer");
+    assert.equal(
+      (await config.loadPendingLogin("older"))?.requestId,
+      "older",
+    );
+  });
+
+  it("ignores and drops logins that expired", async () => {
+    await config.savePendingLogin({
+      ...pendingLogin("stale", 1),
+      expiresAt: "2020-01-01T00:00:00.000Z",
+    });
+
+    assert.equal(await config.loadPendingLogin(), null);
+
+    await config.savePendingLogin(pendingLogin("live", 2));
+    const raw = JSON.parse(await fs.readFile(CONFIG_PATH, "utf-8"));
+    assert.deepEqual(Object.keys(raw.pendingLogins), ["live"]);
+  });
+
+  it("forgets a login once it is removed", async () => {
+    await config.savePendingLogin(pendingLogin("done", 1));
+
+    await config.removePendingLogin("done");
+
+    assert.equal(await config.loadPendingLogin("done"), null);
+  });
+});
+
 describe("concurrent changes", () => {
   beforeEach(resetConfig);
 
@@ -524,4 +560,17 @@ function login(input: {
   apiUrl?: string;
 }) {
   return config.saveWorkspace(input);
+}
+
+function pendingLogin(requestId: string, minute: number) {
+  return {
+    requestId,
+    codeVerifier: `verifier-${requestId}`,
+    url: `https://app.example.com/agent-login/${requestId}`,
+    apiUrl: null,
+    expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+    name: null,
+    signerAddress: KEY_A.address,
+    startedAt: `2026-10-07T00:0${minute}:00.000Z`,
+  };
 }

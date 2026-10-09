@@ -20,7 +20,22 @@ npx @splits/splits-cli <command>
 
 ## Authentication
 
-Get an API key from [Splits Settings](https://app.splits.org/settings/team/api-keys/). Two options:
+**Browser login** (no key to copy or paste):
+
+```sh
+splits auth login --client-name "Claude Code"
+```
+
+With no key on the flag or stdin, `auth login` proves a local signing key (it creates one when none is saved), opens an approval page in the browser and waits up to 10 minutes. The person logs in to Splits and either connects an existing workspace, choosing the key's permissions, or creates a new workspace. A new workspace has the person's login email as the recovery signer on the root account and this CLI's local key as the only signer of the treasury. The API key goes straight into the local config; it never appears in the output. `--client-name` is required: it is the name of the agent asking for access, which the person sees on the approval page and which names the API key. Pass `--key <address>` when several local keys are saved.
+
+Agents that cannot wait on one command, such as MCP clients, split the same flow in two:
+
+```sh
+splits auth login-start --client-name "Claude Code"   # returns the approval URL
+splits auth login-status                              # checks once; saves the workspace once approved
+```
+
+Or bring an API key from [Splits Settings](https://app.splits.org/settings/team/api-keys/). Two options:
 
 **Environment variable** (preferred for CI and headless contexts):
 
@@ -325,6 +340,7 @@ The MCP server exposes these tools:
 - `transactions_sign` — Sign a pending multisig transaction with a local EOA
 - `auth_whoami` — Show org, workspace, API key source, and local signing keys
 - `auth_login` / `auth_logout` — Save or remove a workspace (stdin-preferred; `--api-key` flag refused under MCP)
+- `auth_login-start` / `auth_login-status` — Log in through a browser approval without the API key passing through the conversation
 - `auth_workspaces` / `auth_use` — List saved workspaces, switch the active one
 - `auth_create_key` / `auth_delete_key` / `auth_import_key` — Manage local EOA signing keys
 
