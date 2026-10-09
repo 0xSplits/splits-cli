@@ -23,16 +23,16 @@ npx @splits/splits-cli <command>
 **Browser login** (no key to copy or paste):
 
 ```sh
-splits auth login
+splits auth login --client-name "Claude Code"
 ```
 
-With no key on the flag or stdin, `auth login` proves a local signing key (it creates one when none is saved), opens an approval page in the browser and waits up to 10 minutes. The person logs in to Splits and either connects an existing workspace, choosing the key's permissions, or creates a new workspace. A new workspace has the person's login email as the recovery signer on the root account and this CLI's local key as the only signer of the treasury. The API key goes straight into the local config; it never appears in the output. Pass `--key <address>` when several local keys are saved.
+With no key on the flag or stdin, `auth login` proves a local signing key (it creates one when none is saved), opens an approval page in the browser and waits up to 10 minutes. The person logs in to Splits and either connects an existing workspace, choosing the key's permissions, or creates a new workspace. A new workspace has the person's login email as the recovery signer on the root account and this CLI's local key as the only signer of the treasury. The API key goes straight into the local config; it never appears in the output. `--client-name` is required: it is the name of the agent asking for access, which the person sees on the approval page and which names the API key. Pass `--key <address>` when several local keys are saved.
 
 Agents that cannot wait on one command, such as MCP clients, split the same flow in two:
 
 ```sh
-splits auth login-start    # returns the approval URL
-splits auth login-status   # checks once; saves the workspace once approved
+splits auth login-start --client-name "Claude Code"   # returns the approval URL
+splits auth login-status                              # checks once; saves the workspace once approved
 ```
 
 Or bring an API key from [Splits Settings](https://app.splits.org/settings/team/api-keys/). Two options:

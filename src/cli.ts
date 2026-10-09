@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { hostname } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -344,8 +343,6 @@ const loginSigner = async (address: string | undefined) => {
   return { account, keyCreated: true };
 };
 
-const defaultClientName = (): string =>
-  `Splits CLI on ${hostname().split(".")[0]}`;
 
 const LOGIN_OUTCOME_MESSAGES = {
   denied: "The login request was denied in the browser.",
@@ -438,11 +435,13 @@ const browserLoginOptions = loginOptions.extend({
     ),
   clientName: z
     .string()
+    .trim()
+    .min(1)
     .max(64)
-    .optional()
     .describe(
-      "Name of the agent or app asking for access, for example `Claude Code`. Shown to the person " +
-        "on the approval page and used in the API key's name. Defaults to `Splits CLI on <hostname>`.",
+      "Your own name as the agent asking for access, the way the person knows you " +
+        "(for example `Claude Code`, `Codex` or `Cursor`). Shown to the person on the approval " +
+        "page and used in the API key's name.",
     ),
 });
 
@@ -459,6 +458,13 @@ auth.command("login", {
     "Saved keys are only used when the SPLITS_API_KEY env var is not set — env always wins.",
   env: authEnv,
   options: browserLoginOptions.extend({
+    clientName: browserLoginOptions.shape.clientName
+      .optional()
+      .describe(
+        "Required for a browser login: your own name as the agent asking for access " +
+          "(for example `Claude Code`, `Codex` or `Cursor`). Shown on the approval page " +
+          "and used in the API key's name. Ignored when an API key is given.",
+      ),
     apiKey: z
       .string()
       .optional()
@@ -491,11 +497,17 @@ auth.command("login", {
     }
 
     if (value.length === 0) {
+      if (options.clientName === undefined) {
+        throw new Error(
+          "A browser login needs --client-name with the name of the agent asking for access, " +
+            'for example `splits auth login --client-name "Claude Code"`. The person sees it on the approval page.',
+        );
+      }
       const { account, keyCreated } = await loginSigner(options.key);
       const started = await startAgentLogin({
         apiUrl: apiUrl ?? DEFAULT_API_URL,
         signer: account,
-        clientName: options.clientName ?? defaultClientName(),
+        clientName: options.clientName,
       });
       process.stderr.write(
         `Approve this login in your browser:\n  ${started.url}\n` +
@@ -561,7 +573,7 @@ auth.command("login", {
 auth.command("login-start", {
   description:
     "Start a browser login without waiting for it, for MCP clients and agents that cannot block. " +
-    "Pass clientName with your own name so the person knows who is asking. " +
+    "Pass clientName with your own name as the agent (for example Claude Code) so the person knows who is asking. " +
     "Proves a local key (creating one when none is saved), opens the approval page, and returns " +
     "its URL. Ask the person to open the URL, log in and approve (connect a workspace or create one), " +
     "then call `auth login-status`. The request expires after 10 minutes.",
@@ -574,7 +586,7 @@ auth.command("login-start", {
     const started = await startAgentLogin({
       apiUrl: apiUrl ?? DEFAULT_API_URL,
       signer: account,
-      clientName: options.clientName ?? defaultClientName(),
+      clientName: options.clientName,
     });
     await savePendingLogin({
       requestId: started.requestId,
