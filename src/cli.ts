@@ -2453,7 +2453,7 @@ create.command("bridge", {
       .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid token address")
       .optional()
       .describe(
-        "The token to receive on destinationChainId. Defaults to the token address, which works for native ETH and tokens deployed at the same address on both chains. Pass it for tokens like USDC whose address differs per chain",
+        "The token to receive on destinationChainId. Defaults to the token address when it holds the same asset there, like ETH between Ethereum, Base, Optimism and Arbitrum. Pass it otherwise, for example for USDC, whose address differs per chain",
       ),
     recipient: z
       .string()
