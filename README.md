@@ -141,7 +141,7 @@ splits transactions create earn-withdraw --account 0x... --chain-id 8453 \
   --asset 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 --amount 25 \
   --pause-auto-earn-seconds 3600
 
-# Propose a swap on one chain (amount is in sellToken units; slippage defaults to 150 bps)
+# Propose a swap on one chain (amount is in sellToken units; slippage defaults per pair like the web app)
 splits transactions create swap --account 0x... --chain-id 8453 \
   --sell-token 0x4200000000000000000000000000000000000006 \
   --buy-token 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 --amount 0.5

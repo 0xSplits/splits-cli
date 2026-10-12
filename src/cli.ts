@@ -2458,7 +2458,7 @@ create.command("swap", {
       .max(10000)
       .optional()
       .describe(
-        "Slippage tolerance in basis points (1 to 10000). Defaults to 150, like the web app's swap form",
+        "Slippage tolerance in basis points (1 to 10000). Defaults to the web app's swap form default for the pair: 10 for two stablecoins, 50 for stablecoins and major assets, 150 otherwise",
       ),
     recipient: z
       .string()
