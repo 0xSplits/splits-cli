@@ -451,6 +451,19 @@ describe("pending browser logins", () => {
 
     assert.equal(await config.loadPendingLogin("done"), null);
   });
+
+  it("holds a fresh login key with the login, not among the local keys", async () => {
+    await config.savePendingLogin({
+      ...pendingLogin("fresh", 1),
+      freshPrivateKey: KEY_A.privateKey,
+    });
+
+    assert.equal(
+      (await config.loadPendingLogin("fresh"))?.freshPrivateKey,
+      KEY_A.privateKey,
+    );
+    assert.deepEqual(await config.listKeys(), []);
+  });
 });
 
 describe("concurrent changes", () => {
@@ -571,6 +584,7 @@ function pendingLogin(requestId: string, minute: number) {
     expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
     name: null,
     signerAddress: KEY_A.address,
+    freshPrivateKey: null,
     startedAt: `2026-10-07T00:0${minute}:00.000Z`,
   };
 }

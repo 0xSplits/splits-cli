@@ -338,18 +338,13 @@ const warnIfEnvKeySet = (env: z.infer<typeof authEnv>): void => {
 };
 
 const loginSigner = async (address: string | undefined) => {
-  const saved = await loadLocalKey(address);
-  if (saved !== null) {
-    return { account: privateKeyToAccount(saved.privateKey), keyCreated: false };
+  if (address !== undefined) {
+    const saved = await loadLocalKey(address);
+    if (saved === null) throw new Error(`No local key with address ${address}.`);
+    return { account: privateKeyToAccount(saved.privateKey), freshPrivateKey: null };
   }
-  const privateKey = generatePrivateKey();
-  const account = privateKeyToAccount(privateKey);
-  await saveKey({
-    name: defaultKeyName(account.address),
-    address: account.address,
-    privateKey,
-  });
-  return { account, keyCreated: true };
+  const freshPrivateKey = generatePrivateKey();
+  return { account: privateKeyToAccount(freshPrivateKey), freshPrivateKey };
 };
 
 const LOGIN_OUTCOME_MESSAGE_BY_STATUS = {
@@ -366,12 +361,18 @@ const saveApprovedLogin = async ({
   apiUrl,
   name,
   signerAddress,
+  freshPrivateKey,
 }: {
   grant: AgentLoginGrant;
   apiUrl: string | undefined;
   name: string | undefined;
-  signerAddress: string;
+  signerAddress: `0x${string}`;
+  freshPrivateKey: `0x${string}` | null;
 }) => {
+  const keySaved = grant.created !== null && freshPrivateKey !== null;
+  if (keySaved) {
+    await saveKey({ name: grant.orgName, address: signerAddress, privateKey: freshPrivateKey });
+  }
   const { alias, replaced } = await saveWorkspace({
     name,
     orgId: grant.orgId,
@@ -401,6 +402,7 @@ const saveApprovedLogin = async ({
     orgName: grant.orgName,
     scopes: grant.scopes,
     created: grant.created,
+    keySaved,
     diagram:
       grant.created === null
         ? null
@@ -445,9 +447,9 @@ const browserLoginOptions = loginOptions.extend({
     .regex(/^0x[a-fA-F0-9]{40}$/)
     .optional()
     .describe(
-      "Local key that proves this agent in a browser login, and becomes the treasury signer " +
-        "if the person creates a workspace. Required when several local keys are saved; " +
-        "a new key is created when none is.",
+      "Saved local key that proves this agent in a browser login, and becomes the treasury signer " +
+        "if the person creates a workspace. Without it, the login uses a new key, which is saved " +
+        "under the workspace's name only when the person creates a workspace.",
     ),
   clientName: z
     .string()
@@ -511,7 +513,7 @@ auth.command("login", {
             'for example `splits auth login --client-name "Claude Code"`. The person sees it on the approval page.',
         );
       }
-      const { account, keyCreated } = await loginSigner(options.key);
+      const { account, freshPrivateKey } = await loginSigner(options.key);
       const started = await startAgentLogin({
         apiUrl: apiUrl ?? DEFAULT_API_URL,
         signer: account,
@@ -543,10 +545,11 @@ auth.command("login", {
         apiUrl,
         name: options.name,
         signerAddress: account.address,
+        freshPrivateKey,
       });
       if (saved.diagram !== null) process.stderr.write(`${saved.diagram}\n`);
       warnIfEnvKeySet(env);
-      return { ...saved, keyCreated, signerAddress: account.address };
+      return { ...saved, signerAddress: account.address };
     }
 
     const value = input.apiKey;
@@ -585,7 +588,7 @@ auth.command("login-start", {
     "Start a browser login without waiting for it, for MCP clients and agents that cannot block. " +
     "Pass clientName with the product name of the app the person is using to talk to you " +
     "(for example Claude Code), not the model name. " +
-    "Proves a local key (creating one when none is saved), opens the approval page, and returns " +
+    "Proves a new local key (or the one given with key), opens the approval page, and returns " +
     "its URL. Ask the person to open the URL, log in and approve (connect a workspace or create one), " +
     "then call `auth login-status`. The request expires after 10 minutes.",
   env: authEnv,
@@ -593,7 +596,7 @@ auth.command("login-start", {
   async run({ env, options }) {
     if (options.name !== undefined) assertWorkspaceAlias(options.name);
     const apiUrl = resolveLoginApiUrl(env, options.apiUrl);
-    const { account, keyCreated } = await loginSigner(options.key);
+    const { account, freshPrivateKey } = await loginSigner(options.key);
     const started = await startAgentLogin({
       apiUrl: apiUrl ?? DEFAULT_API_URL,
       signer: account,
@@ -607,6 +610,7 @@ auth.command("login-start", {
       expiresAt: started.expiresAt,
       name: options.name ?? null,
       signerAddress: account.address,
+      freshPrivateKey,
       startedAt: new Date().toISOString(),
     });
     openInBrowser(started.url);
@@ -614,7 +618,6 @@ auth.command("login-start", {
       requestId: started.requestId,
       url: started.url,
       expiresAt: started.expiresAt,
-      keyCreated,
       signerAddress: account.address,
       next:
         `Ask the person to open the URL, check that the page shows the agent key ${account.address}, ` +
@@ -671,6 +674,7 @@ auth.command("login-status", {
       apiUrl: pending.apiUrl ?? undefined,
       name: pending.name ?? undefined,
       signerAddress: pending.signerAddress,
+      freshPrivateKey: pending.freshPrivateKey,
     });
     await removePendingLogin(pending.requestId);
     warnIfEnvKeySet(env);

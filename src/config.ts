@@ -58,13 +58,17 @@ const WorkspaceSchema = z.object({
   savedAt: z.string(),
 });
 
+const hexMatching = (re: RegExp) =>
+  z.custom<`0x${string}`>((value) => typeof value === "string" && re.test(value));
+
 const PendingLoginSchema = z.object({
   codeVerifier: z.string().min(1),
   url: z.string().url(),
   apiUrl: z.string().url().nullable(),
   expiresAt: z.string(),
   name: z.string().nullable(),
-  signerAddress: z.string().regex(HEX_ADDRESS_RE),
+  signerAddress: hexMatching(HEX_ADDRESS_RE),
+  freshPrivateKey: hexMatching(HEX_PRIVATE_KEY_RE).nullable().default(null),
   startedAt: z.string(),
 });
 
