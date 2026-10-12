@@ -2414,6 +2414,98 @@ create.command("earn-withdraw", {
   },
 });
 
+create.command("bridge", {
+  description:
+    "Create a proposal, for a human signer to approve, that bridges a token from one chain to another, by default to the same smart account. Specify amount in human-readable units of the token sent (e.g. '100' for 100 USDC). The server quotes the route; the response includes the quoted buyAmount and a signUrl.",
+  env: authEnv,
+  options: workspaceOption.extend({
+    account: z
+      .string()
+      .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid Ethereum address")
+      .describe(
+        "The smart account address to create the proposal from (0x-prefixed, 40 hex chars)",
+      ),
+    chainId: z
+      .number()
+      .describe(
+        "The chain ID the tokens leave from (e.g., 1 for Ethereum, 8453 for Base)",
+      ),
+    destinationChainId: z
+      .number()
+      .describe("The chain ID the tokens arrive on. Must differ from chainId"),
+    token: z
+      .string()
+      .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid token address")
+      .describe(
+        "The token to send on chainId (use 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE for native ETH). An Earn token bridges out of that Earn position",
+      ),
+    amount: z
+      .string()
+      .regex(
+        /^(0|[1-9]\d*)(\.\d+)?$/,
+        "Must be a positive decimal number (no scientific notation, no negatives, no leading zeros)",
+      )
+      .describe(
+        "The amount of token to send in human-readable units (e.g., '100' for 100 USDC)",
+      ),
+    buyToken: z
+      .string()
+      .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid token address")
+      .optional()
+      .describe(
+        "The token to receive on destinationChainId. Defaults to the token address, which works for native ETH and tokens deployed at the same address on both chains. Pass it for tokens like USDC whose address differs per chain",
+      ),
+    recipient: z
+      .string()
+      .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid Ethereum address")
+      .optional()
+      .describe(
+        "The address that receives the tokens on destinationChainId. Defaults to the smart account itself",
+      ),
+    memo: z
+      .string()
+      .max(500)
+      .optional()
+      .describe("Optional memo for the transaction (max 500 chars)"),
+    properties: propertiesOptionSchema
+      .optional()
+      .describe(
+        'Optional custom JSON metadata. Total minified ≤ 500 chars. Used as the base; any --property overlays are applied on top. To load from a file, use shell substitution: --properties "$(cat props.json)"',
+      ),
+    property: z
+      .array(z.string())
+      .optional()
+      .describe(
+        "String key/value overlays for properties; repeatable. Splits on the first '='. Example: --property invoice=INV-42",
+      ),
+  }),
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
+    const properties =
+      options.properties !== undefined || options.property?.length
+        ? applyPropertyOverlays(
+            parsePropertiesOption(options.properties) ?? {},
+            options.property,
+          )
+        : undefined;
+    const body = {
+      account: options.account,
+      chainId: options.chainId,
+      destinationChainId: options.destinationChainId,
+      token: options.token,
+      amount: options.amount,
+      ...(options.buyToken !== undefined && { buyToken: options.buyToken }),
+      ...(options.recipient !== undefined && { recipient: options.recipient }),
+      ...(options.memo !== undefined && { memo: options.memo }),
+      ...(properties !== undefined && { properties }),
+    } satisfies Record<string, unknown>;
+    return apiRequest<{ data?: unknown }>(env, "/proposals/bridge", {
+      method: "POST",
+      body,
+    });
+  },
+});
+
 create.command("custom", {
   description:
     "Create a transaction proposal with raw EVM calls. Use for any on-chain action including contract interactions, approvals, and swaps.",

@@ -140,6 +140,12 @@ splits transactions create earn-deposit --account 0x... --chain-id 8453 \
 splits transactions create earn-withdraw --account 0x... --chain-id 8453 \
   --asset 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 --amount 25 \
   --pause-auto-earn-seconds 3600
+
+# Propose bridging 100 USDC from Ethereum to the same account on Base
+# (USDC has a different address on each chain, so pass --buy-token)
+splits transactions create bridge --account 0x... --chain-id 1 \
+  --destination-chain-id 8453 --token 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 \
+  --amount 100 --buy-token 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
 ```
 
 For multisig transactions, gas can only be refreshed when exactly one signer remains. `transactions sign` requires a local EOA (see "Local signing key" above) and that the address is already an authorized signer on the transaction's smart account.
