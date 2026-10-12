@@ -140,7 +140,14 @@ splits transactions create earn-deposit --account 0x... --chain-id 8453 \
 splits transactions create earn-withdraw --account 0x... --chain-id 8453 \
   --asset 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 --amount 25 \
   --pause-auto-earn-seconds 3600
+
+# Off-ramp to a bank account (amount is the fiat the bank receives; the fee is added on top)
+splits offramp accounts
+splits transactions create offramp --account 0x... \
+  --external-account-id <id> --amount 100
 ```
+
+Off-ramps need an approved KYC and an owner-scoped API key for an org owner.
 
 For multisig transactions, gas can only be refreshed when exactly one signer remains. `transactions sign` requires a local EOA (see "Local signing key" above) and that the address is already an authorized signer on the transaction's smart account.
 
