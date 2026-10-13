@@ -2416,7 +2416,7 @@ create.command("earn-withdraw", {
 
 create.command("offramp", {
   description:
-    "Create a proposal that off-ramps USDC or EURC to one of the org's bank accounts through Bridge. Pick the bank with `offramp accounts`; it sets the chain, token, and recipient. Specify amount as the fiat the bank receives (minimum 10); the proposal sends that plus the off-ramp fee. Requires an approved KYC and an owner-scoped API key for an org owner. Returns the proposal with the fee, the token amount sent, and a signUrl.",
+    "Create a proposal that off-ramps USDC or EURC to one of the org's bank accounts through Bridge. Pick the bank with `offramp accounts`; it sets the chain, token, and recipient. Specify amount as the fiat the bank receives (minimum 10); the proposal sends that plus the off-ramp fee, which is 0.25% of the amount sent rounded up to the cent (10 sends 10.03). If the account holds the token in Earn or holds another token, pass --source-token to pay with it in the same proposal. Requires an approved KYC and an owner-scoped API key for an org owner. Returns the proposal with the fee, the token amount sent, and a signUrl.",
   env: authEnv,
   options: workspaceOption.extend({
     account: z
@@ -2437,6 +2437,19 @@ create.command("offramp", {
       )
       .describe(
         "The fiat amount the bank receives, in its currency (e.g. '100' for $100 or €100). Minimum 10",
+      ),
+    sourceToken: z
+      .string()
+      .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid token address")
+      .optional()
+      .describe(
+        "Optional token to pay with, like \"Pay with\" in the web app. Defaults to the bank account's token, a direct transfer. Any other token the account holds is swapped, or bridged when --source-chain-id differs. An Earn token pays from that Earn position",
+      ),
+    sourceChainId: z
+      .number()
+      .optional()
+      .describe(
+        "Optional chain of --source-token. Defaults to the bank account's chain. A different chain bridges the payment",
       ),
     memo: z
       .string()
@@ -2468,6 +2481,12 @@ create.command("offramp", {
       account: options.account,
       externalAccountId: options.externalAccountId,
       amount: options.amount,
+      ...(options.sourceToken !== undefined && {
+        sourceToken: options.sourceToken,
+      }),
+      ...(options.sourceChainId !== undefined && {
+        sourceChainId: options.sourceChainId,
+      }),
       ...(options.memo !== undefined && { memo: options.memo }),
       ...(properties !== undefined && { properties }),
     } satisfies Record<string, unknown>;
