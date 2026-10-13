@@ -150,7 +150,7 @@ splits transactions create offramp --account 0x... \
   --external-account-id <id> --amount 100 --source-token <earn-usdc-address>
 ```
 
-Off-ramps need an approved KYC and an owner-scoped API key for an org owner. The fee is 0.25% of the amount sent, rounded up to the cent.
+Off-ramps need an approved KYC and an owner-scoped API key for an org owner. The response shows the off-ramp fee and the token amount sent.
 
 For multisig transactions, gas can only be refreshed when exactly one signer remains. `transactions sign` requires a local EOA (see "Local signing key" above) and that the address is already an authorized signer on the transaction's smart account.
 

@@ -2416,7 +2416,7 @@ create.command("earn-withdraw", {
 
 create.command("offramp", {
   description:
-    "Create a proposal that off-ramps USDC or EURC to one of the org's bank accounts through Bridge. Pick the bank with `offramp accounts`; it sets the chain, token, and recipient. Specify amount as the fiat the bank receives (minimum 10); the proposal sends that plus the off-ramp fee, which is 0.25% of the amount sent rounded up to the cent (10 sends 10.03). If the account holds the token in Earn or holds another token, pass --source-token to pay with it in the same proposal. Requires an approved KYC and an owner-scoped API key for an org owner. Returns the proposal with the fee, the token amount sent, and a signUrl.",
+    "Create a proposal that off-ramps USDC or EURC to one of the org's bank accounts through Bridge. Pick the bank with `offramp accounts`; it sets the chain, token, and recipient. Specify amount as the fiat the bank receives (minimum 10); the proposal sends that plus the off-ramp fee, and returns both the fee and the token amount sent. If the account holds the token in Earn or holds another token, pass --source-token to pay with it in the same proposal. Requires an approved KYC and an owner-scoped API key for an org owner. Returns the proposal with the fee, the token amount sent, and a signUrl.",
   env: authEnv,
   options: workspaceOption.extend({
     account: z
@@ -2449,7 +2449,7 @@ create.command("offramp", {
       .number()
       .optional()
       .describe(
-        "Optional chain of --source-token. Defaults to the bank account's chain. A different chain bridges the payment",
+        "Optional chain of --source-token. Defaults to the bank account's chain. A different chain bridges the payment and requires --source-token",
       ),
     memo: z
       .string()
