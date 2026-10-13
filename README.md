@@ -26,12 +26,12 @@ npx @splits/splits-cli <command>
 splits auth login --client-name "Claude Code"
 ```
 
-With no key on the flag or stdin, `auth login` proves a new signing key, opens an approval page in the browser and waits up to 10 minutes. The person logs in to Splits and either connects an existing workspace, choosing the key's permissions, or creates a new workspace. A new workspace has the person's login email as the recovery signer on the root account and this CLI's local key as the only signer of the treasury. The API key goes straight into the local config; it never appears in the output. `--client-name` is required: it is the name of the agent asking for access, which the person sees on the approval page and which names the API key. The new key is saved under the workspace's name only when the person creates a workspace; after a connect it is dropped. Pass `--key <address>` to prove a saved key instead, for example to make it the treasury signer.
+With no key on the flag or stdin, `auth login` proves a new signing key, opens an approval page in the browser, prints a code and waits up to 10 minutes. The person logs in to Splits, enters the code, and either connects an existing workspace, choosing the key's permissions, or creates a new workspace. A new workspace has the person's login email as the recovery signer on the root account and this CLI's local key as the only signer of the treasury. The API key goes straight into the local config; it never appears in the output. `--client-name` is required: it is the name of the agent asking for access, which the person sees on the approval page and which names the API key. The new key is saved under the workspace's name only when the person creates a workspace; after a connect it is dropped. Pass `--key <address>` to prove a saved key instead, for example to make it the treasury signer.
 
-Agents that cannot wait on one command, such as MCP clients, split the same flow in two:
+The person must type the printed code on the page. Agents that cannot show the person a command's output while it waits, such as MCP clients or an agent running the CLI in a shell tool, split the same flow in two:
 
 ```sh
-splits auth login-start --client-name "Claude Code"   # returns the approval URL
+splits auth login-start --client-name "Claude Code"   # returns the approval URL and the code to show the person
 splits auth login-status                              # waits for the approval, then saves the workspace
 ```
 
@@ -41,7 +41,7 @@ splits auth login-status                              # waits for the approval, 
 splits workspace create --name "Acme" --chain-ids 8453,1 --client-name "Claude Code"
 ```
 
-The same browser login, with the approval page opened on its create tab and prefilled with the name and chains (`--chain-ids` defaults to the chains a new workspace gets in the app). The person approves as the owner. Their login email is the only signer of the root account, which owns the treasury; this CLI's local key is the only signer of the treasury, which is the deposit address on every chosen chain. The key is saved as a new active workspace and a diagram of the accounts is printed. Under MCP the tool returns the approval URL without waiting; `auth login-status` then waits for the approval and saves the workspace.
+The same browser login, with the approval page opened on its create tab and prefilled with the name and chains (`--chain-ids` defaults to the chains a new workspace gets in the app). The person approves as the owner. Their login email is the only signer of the root account, which owns the treasury; this CLI's local key is the only signer of the treasury, which is the deposit address on every chosen chain. The key is saved as a new active workspace and a diagram of the accounts is printed. Under MCP the tool returns the approval URL and the code without waiting; `auth login-status` then waits for the approval and saves the workspace.
 
 Or bring an API key from [Splits Settings](https://app.splits.org/settings/team/api-keys/). Two options:
 
