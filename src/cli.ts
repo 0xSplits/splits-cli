@@ -2416,7 +2416,7 @@ create.command("earn-withdraw", {
 
 create.command("offramp", {
   description:
-    "Create a proposal that off-ramps USDC or EURC to one of the org's bank accounts through Bridge. Pick the bank with `offramp accounts`; it sets the chain, token, and recipient. Specify amount as the fiat the bank receives (minimum 10); the proposal sends that plus the off-ramp fee, and returns both the fee and the token amount sent. If the account holds the token in Earn or holds another token, pass --source-token to pay with it in the same proposal. Requires an approved KYC and an owner-scoped API key for an org owner. Returns the proposal with the fee, the token amount sent, and a signUrl.",
+    "Create a proposal that off-ramps USDC or EURC to one of the org's bank accounts through Bridge. Pick the bank with `offramp external-accounts`; it sets the chain, token, and recipient. Specify amount as the fiat the bank receives (minimum 10); the proposal sends that plus the off-ramp fee, and returns both the fee and the token amount sent. If the account holds the token in Earn or holds another token, pass --source-token to pay with it in the same proposal. Requires an owner-scoped API key for an org owner. Returns the proposal with the fee, the token amount sent, and a signUrl.",
   env: authEnv,
   options: workspaceOption.extend({
     account: z
@@ -2428,7 +2428,7 @@ create.command("offramp", {
     externalAccountId: z
       .string()
       .min(1)
-      .describe("The bank account id, from `offramp accounts`"),
+      .describe("The bank account id, from `offramp external-accounts`"),
     amount: z
       .string()
       .regex(
@@ -2705,7 +2705,7 @@ const offramp = Cli.create("offramp", {
   description: "Off-ramp to the org's bank accounts",
 });
 
-offramp.command("accounts", {
+offramp.command("external-accounts", {
   description:
     "List the bank accounts the org can off-ramp to, with the currency each receives and the chain and token the off-ramp sends. Pass an id to `transactions create offramp`. Requires an owner-scoped API key for an org owner.",
   env: authEnv,
