@@ -2707,6 +2707,114 @@ create.command("earn-withdraw", {
   },
 });
 
+create.command("swap", {
+  description:
+    "Create a proposal, for a human signer to approve, that sells an exact amount of one token for another, like the swap form in the web app. Pass destinationChainId to receive buyToken on another chain, which bridges the swap. The server fetches the quote and builds the calls. Specify amount in human-readable sellToken units (e.g. '100' for 100 USDC). Returns the proposal with the quoted buy amount and a signUrl.",
+  env: authEnv,
+  options: workspaceOption.extend({
+    account: z
+      .string()
+      .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid Ethereum address")
+      .describe(
+        "The smart account address to create the proposal from (0x-prefixed, 40 hex chars)",
+      ),
+    chainId: z
+      .number()
+      .describe(
+        "The chain ID where the account sells sellToken; the proposal runs on this chain (e.g., 1 for Ethereum, 8453 for Base)",
+      ),
+    destinationChainId: z
+      .number()
+      .optional()
+      .describe(
+        "The chain ID where buyToken is received. Defaults to chainId. A different chain bridges the swap, like the web app swap form with another destination chain",
+      ),
+    sellToken: z
+      .string()
+      .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid token address")
+      .describe(
+        "The token the account sells on chainId (use 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE for native ETH). An Earn token withdraws from that Earn position",
+      ),
+    buyToken: z
+      .string()
+      .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid token address")
+      .describe(
+        "The token received on destinationChainId (use 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE for native ETH). An Earn token deposits into that vault and is allowed only when the recipient is an account in this workspace",
+      ),
+    amount: z
+      .string()
+      .regex(
+        /^(0|[1-9]\d*)(\.\d+)?$/,
+        "Must be a positive decimal number (no scientific notation, no negatives, no leading zeros)",
+      )
+      .describe(
+        "The amount of sellToken to sell, in human-readable units (e.g., '100' for 100 USDC)",
+      ),
+    slippageBps: z
+      .number()
+      .int()
+      .min(1)
+      .max(10000)
+      .optional()
+      .describe(
+        "Slippage tolerance in basis points (1 to 10000). Defaults to the web app's swap form default for the pair: 10 for two stablecoins, 50 for stablecoins and major assets, 150 otherwise",
+      ),
+    recipient: z
+      .string()
+      .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid Ethereum address")
+      .optional()
+      .describe(
+        "Address that receives buyToken. Defaults to the account. Any other address adds a transfer to the proposal",
+      ),
+    memo: z
+      .string()
+      .max(500)
+      .optional()
+      .describe("Optional memo for the transaction (max 500 chars)"),
+    properties: propertiesOptionSchema
+      .optional()
+      .describe(
+        'Optional custom JSON metadata. Total minified ≤ 500 chars. Used as the base; any --property overlays are applied on top. To load from a file, use shell substitution: --properties "$(cat props.json)"',
+      ),
+    property: z
+      .array(z.string())
+      .optional()
+      .describe(
+        "String key/value overlays for properties; repeatable. Splits on the first '='. Example: --property invoice=INV-42",
+      ),
+  }),
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
+    const properties =
+      options.properties !== undefined || options.property?.length
+        ? applyPropertyOverlays(
+            parsePropertiesOption(options.properties) ?? {},
+            options.property,
+          )
+        : undefined;
+    const body = {
+      account: options.account,
+      chainId: options.chainId,
+      ...(options.destinationChainId !== undefined && {
+        destinationChainId: options.destinationChainId,
+      }),
+      sellToken: options.sellToken,
+      buyToken: options.buyToken,
+      amount: options.amount,
+      ...(options.slippageBps !== undefined && {
+        slippageBps: options.slippageBps,
+      }),
+      ...(options.recipient !== undefined && { recipient: options.recipient }),
+      ...(options.memo !== undefined && { memo: options.memo }),
+      ...(properties !== undefined && { properties }),
+    } satisfies Record<string, unknown>;
+    return apiRequest<{ data?: unknown }>(env, "/proposals/swap", {
+      method: "POST",
+      body,
+    });
+  },
+});
+
 create.command("custom", {
   description:
     "Create a transaction proposal with raw EVM calls. Use for any on-chain action including contract interactions, approvals, and swaps.",
