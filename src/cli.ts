@@ -2416,7 +2416,7 @@ create.command("earn-withdraw", {
 
 create.command("swap", {
   description:
-    "Create a proposal, for a human signer to approve, that sells an exact amount of one token for another on the same chain, like the swap form in the web app. The server fetches the quote and builds the calls. Specify amount in human-readable sellToken units (e.g. '100' for 100 USDC). Returns the proposal with the quoted buy amount and a signUrl.",
+    "Create a proposal, for a human signer to approve, that sells an exact amount of one token for another, like the swap form in the web app. Pass destinationChainId to receive buyToken on another chain, which bridges the swap. The server fetches the quote and builds the calls. Specify amount in human-readable sellToken units (e.g. '100' for 100 USDC). Returns the proposal with the quoted buy amount and a signUrl.",
   env: authEnv,
   options: workspaceOption.extend({
     account: z
@@ -2428,19 +2428,25 @@ create.command("swap", {
     chainId: z
       .number()
       .describe(
-        "The chain ID where the smart account swaps; both tokens live on this chain (e.g., 1 for Ethereum, 8453 for Base)",
+        "The chain ID where the account sells sellToken; the proposal runs on this chain (e.g., 1 for Ethereum, 8453 for Base)",
+      ),
+    destinationChainId: z
+      .number()
+      .optional()
+      .describe(
+        "The chain ID where buyToken is received. Defaults to chainId. A different chain bridges the swap, like the web app swap form with another destination chain",
       ),
     sellToken: z
       .string()
       .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid token address")
       .describe(
-        "The token the account sells (use 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE for native ETH). An Earn token withdraws from that Earn position",
+        "The token the account sells on chainId (use 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE for native ETH). An Earn token withdraws from that Earn position",
       ),
     buyToken: z
       .string()
       .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid token address")
       .describe(
-        "The token the swap buys (use 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE for native ETH). An Earn token deposits into that vault and is allowed only when the recipient is an account in this workspace",
+        "The token received on destinationChainId (use 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE for native ETH). An Earn token deposits into that vault and is allowed only when the recipient is an account in this workspace",
       ),
     amount: z
       .string()
@@ -2496,6 +2502,9 @@ create.command("swap", {
     const body = {
       account: options.account,
       chainId: options.chainId,
+      ...(options.destinationChainId !== undefined && {
+        destinationChainId: options.destinationChainId,
+      }),
       sellToken: options.sellToken,
       buyToken: options.buyToken,
       amount: options.amount,
