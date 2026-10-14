@@ -24,7 +24,8 @@ export type AgentLoginGrant = {
 };
 
 export type FinishedAgentLogin =
-  | { status: "denied" | "consumed" | "expired" }
+  | { status: "denied"; reason: "person_declined" | "wrong_code" }
+  | { status: "consumed" | "expired" }
   | ({ status: "approved" } & AgentLoginGrant);
 
 export type AgentLoginPoll = { status: "pending" } | FinishedAgentLogin;
@@ -32,6 +33,7 @@ export type AgentLoginPoll = { status: "pending" } | FinishedAgentLogin;
 export type StartedAgentLogin = {
   requestId: string;
   url: string;
+  code: string;
   expiresAt: string;
   codeVerifier: string;
 };
@@ -81,7 +83,7 @@ export const startAgentLogin = async ({
   const { codeVerifier, codeChallenge } = createPkcePair();
   const signature = await signer.signMessage({ message: challenge.message });
   const { data } = await httpRequest<{
-    data: { requestId: string; url: string; expiresAt: string };
+    data: { requestId: string; url: string; code: string; expiresAt: string };
   }>(credentials, "/auth/agent-login/requests", {
     method: "POST",
     requireAuth: false,
