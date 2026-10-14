@@ -36,6 +36,8 @@ export type StartedAgentLogin = {
   codeVerifier: string;
 };
 
+export type CreateWorkspacePrefill = { name: string; chainIds?: number[] };
+
 type MessageSigner = {
   address: `0x${string}`;
   signMessage: (args: { message: string }) => Promise<`0x${string}`>;
@@ -53,10 +55,12 @@ export const startAgentLogin = async ({
   apiUrl,
   signer,
   clientName,
+  createWorkspace,
 }: {
   apiUrl: string;
   signer: MessageSigner;
   clientName: string;
+  createWorkspace?: CreateWorkspacePrefill;
 }): Promise<StartedAgentLogin> => {
   const credentials = { apiKey: null, apiUrl };
   const { data: challenge } = await httpRequest<{
@@ -85,6 +89,7 @@ export const startAgentLogin = async ({
       codeChallenge,
       clientName,
       signer: { address: signer.address, nonce: challenge.nonce, signature },
+      createWorkspace,
     },
   });
   return { ...data, codeVerifier };
@@ -211,4 +216,5 @@ export const describeCreatedWorkspace = ({
     `${orgName} (chains ${created.chainIds.join(", ")})`,
     `└─ Root ${created.rootAddress}  1 of 1: ${created.recoveryEmail} (recovery)`,
     `   └─ Treasury ${created.treasuryAddress}  1 of 1: this agent's key ${signerAddress}`,
+    `Deposit address: ${created.treasuryAddress} (the treasury, same on every chain above)`,
   ].join("\n");
