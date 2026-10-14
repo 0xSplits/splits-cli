@@ -1197,7 +1197,9 @@ accounts.command("balances", {
 });
 
 accounts.command("chains", {
-  description: "List chains an account is deployed/synced on",
+  description:
+    "List every chain Splits supports, with whether this account's signers are in sync on each. " +
+    "For the networks enabled on the org, use 'accounts networks'.",
   env: authEnv,
   options: workspaceOption,
   args: z.object({
@@ -1423,6 +1425,19 @@ accounts.command("update-signers", {
   },
 });
 
+accounts.command("networks", {
+  description:
+    "List the networks enabled on the org, which every account operates on. " +
+    "Also returns the add-networks proposal still pending, if any, with the chains it adds and its signUrl. " +
+    "Those chains join the list once the proposal executes.",
+  env: authEnv,
+  options: workspaceOption,
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
+    return apiRequest(env, "/org/networks");
+  },
+});
+
 accounts.command("add-networks", {
   description:
     "Add networks to every account in the org. Networks already on the org are kept, except one no longer supported. " +
@@ -1433,7 +1448,7 @@ accounts.command("add-networks", {
     "Sign it on the web via the returned signUrl, or with 'transactions sign <id>' from a local key that is a signer on that account. " +
     "On a multisig, run 'transactions update-gas-estimation <id>' before the last signature. " +
     "When no onchain change is needed, the networks are added right away and networksAdded is true. " +
-    "Use 'chains list' for the supported chain ids and 'accounts chains <address>' for the current ones. " +
+    "Use 'accounts networks' for the networks already enabled and 'chains list' for the supported ones. " +
     "Returns 400 SMART_ACCOUNT_MERKLE_TRANSACTION_IN_PROGRESS while another signer or network change is pending. " +
     "Requires owner-scoped API key.",
   env: authEnv,

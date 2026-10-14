@@ -272,6 +272,9 @@ splits accounts create --name "Operations" --passkeyIds <id1>,<id2> --threshold 
 splits accounts create --name "Ops"  --eoaSignerIds <eoa-id1>,<eoa-id2>     --threshold 2
 splits accounts create --name "Bots" --eoaAddresses 0xabc...,0xdef...        --threshold 1
 
+# List the networks enabled on the org, and any network addition still pending
+splits accounts networks
+
 # Add networks to every account in the org (requires owner-scoped API key).
 # Returns the proposal to sign, or networksAdded true when no onchain change is needed.
 splits accounts add-networks --chain-ids 10,42161
