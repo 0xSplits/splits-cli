@@ -1410,7 +1410,7 @@ accounts.command("update-signers", {
 
 accounts.command("add-networks", {
   description:
-    "Add networks to every account in the org. Networks already on the org are kept. " +
+    "Add networks to every account in the org. Networks already on the org are kept, except one no longer supported. " +
     "When an account needs an onchain change on a new network (a deployment or a signer sync), " +
     "this creates one proposal that covers every network: it returns networksAdded false and the proposal. " +
     "The proposal sits on the Treasury account, or on the Root account when the Treasury itself needs an update; " +
@@ -1419,7 +1419,7 @@ accounts.command("add-networks", {
     "On a multisig, run 'transactions update-gas-estimation <id>' before the last signature. " +
     "When no onchain change is needed, the networks are added right away and networksAdded is true. " +
     "Use 'chains list' for the supported chain ids and 'accounts chains <address>' for the current ones. " +
-    "Returns 409 SMART_ACCOUNT_STATE_CHANGE_IN_PROGRESS while another signer or network change is pending. " +
+    "Returns 400 SMART_ACCOUNT_MERKLE_TRANSACTION_IN_PROGRESS while another signer or network change is pending. " +
     "Requires owner-scoped API key.",
   env: authEnv,
   options: workspaceOption.extend({
