@@ -2834,6 +2834,89 @@ create.command("earn-withdraw", {
   },
 });
 
+create.command("offramp", {
+  description:
+    "Create a proposal that off-ramps USDC or EURC to one of the org's bank accounts through Bridge. Pick the bank with `offramp external-accounts`; it sets the chain, token, and recipient. Specify amount as the fiat the bank receives (minimum 10); the proposal sends that plus the off-ramp fee, and returns both the fee and the token amount sent. If the account holds the token in Earn or holds another token, pass --source-token to pay with it in the same proposal. Requires an owner-scoped API key for an org owner. Returns the proposal with the fee, the token amount sent, and a signUrl.",
+  env: authEnv,
+  options: workspaceOption.extend({
+    account: z
+      .string()
+      .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid Ethereum address")
+      .describe(
+        "The smart account address to create the proposal from (0x-prefixed, 40 hex chars)",
+      ),
+    externalAccountId: z
+      .string()
+      .min(1)
+      .describe("The bank account id, from `offramp external-accounts`"),
+    amount: z
+      .string()
+      .regex(
+        /^(0|[1-9]\d*)(\.\d{1,2})?$/,
+        "Must be a positive decimal number with at most 2 decimal places",
+      )
+      .describe(
+        "The fiat amount the bank receives, in its currency (e.g. '100' for $100 or €100). Minimum 10",
+      ),
+    sourceToken: z
+      .string()
+      .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid token address")
+      .optional()
+      .describe(
+        "Optional token to pay with, like \"Pay with\" in the web app. Defaults to the bank account's token, a direct transfer. Any other token the account holds is swapped, or bridged when --source-chain-id differs. An Earn token pays from that Earn position",
+      ),
+    sourceChainId: z
+      .number()
+      .optional()
+      .describe(
+        "Optional chain of --source-token. Defaults to the bank account's chain. A different chain bridges the payment and requires --source-token",
+      ),
+    memo: z
+      .string()
+      .max(500)
+      .optional()
+      .describe("Optional memo for the transaction (max 500 chars)"),
+    properties: propertiesOptionSchema
+      .optional()
+      .describe(
+        'Optional custom JSON metadata. Total minified ≤ 500 chars. Used as the base; any --property overlays are applied on top. To load from a file, use shell substitution: --properties "$(cat props.json)"',
+      ),
+    property: z
+      .array(z.string())
+      .optional()
+      .describe(
+        "String key/value overlays for properties; repeatable. Splits on the first '='. Example: --property invoice=INV-42",
+      ),
+  }),
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
+    const properties =
+      options.properties !== undefined || options.property?.length
+        ? applyPropertyOverlays(
+            parsePropertiesOption(options.properties) ?? {},
+            options.property,
+          )
+        : undefined;
+    const body = {
+      account: options.account,
+      externalAccountId: options.externalAccountId,
+      amount: options.amount,
+      ...(options.sourceToken !== undefined && {
+        sourceToken: options.sourceToken,
+      }),
+      ...(options.sourceChainId !== undefined && {
+        sourceChainId: options.sourceChainId,
+      }),
+      ...(options.memo !== undefined && { memo: options.memo }),
+      ...(properties !== undefined && { properties }),
+    } satisfies Record<string, unknown>;
+    return apiRequest<{ data?: unknown }>(env, "/proposals/offramp", {
+      method: "POST",
+      body,
+    });
+  },
+});
+
 create.command("swap", {
   description:
     "Create a proposal, for a human signer to approve, that sells an exact amount of one token for another, like the swap form in the web app. Pass destinationChainId to receive buyToken on another chain, which bridges the swap. The server fetches the quote and builds the calls. Specify amount in human-readable sellToken units (e.g. '100' for 100 USDC). Returns the proposal with the quoted buy amount and a signUrl.",
@@ -3141,6 +3224,27 @@ contacts.command("lookup", {
 });
 
 cli.command(contacts);
+
+// =============================================================================
+// offramp
+// =============================================================================
+
+const offramp = Cli.create("offramp", {
+  description: "Off-ramp to the org's bank accounts",
+});
+
+offramp.command("external-accounts", {
+  description:
+    "List the bank accounts the org can off-ramp to, with the currency each receives and the chain and token the off-ramp sends. Pass an id to `transactions create offramp`. Requires an owner-scoped API key for an org owner.",
+  env: authEnv,
+  options: workspaceOption,
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
+    return apiRequest(env, "/offramp/external-accounts");
+  },
+});
+
+cli.command(offramp);
 
 // =============================================================================
 // tokens

@@ -164,6 +164,14 @@ splits transactions create earn-withdraw --account 0x... --chain-id 8453 \
   --asset 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 --amount 25 \
   --pause-auto-earn-seconds 3600
 
+# Off-ramp to a bank account (amount is the fiat the bank receives; the fee is added on top)
+splits offramp external-accounts
+splits transactions create offramp --account 0x... \
+  --external-account-id <id> --amount 100
+# Pay it from Earn USDC (or any other token) in the same proposal
+splits transactions create offramp --account 0x... \
+  --external-account-id <id> --amount 100 --source-token <earn-usdc-address>
+
 # Propose a swap (amount is in sellToken units; slippage defaults per pair like the web app)
 splits transactions create swap --account 0x... --chain-id 8453 \
   --sell-token 0x4200000000000000000000000000000000000006 \
@@ -178,6 +186,8 @@ splits transactions create swap --account 0x... --chain-id 8453 --destination-ch
   --sell-token 0x4200000000000000000000000000000000000006 \
   --buy-token 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 --amount 0.5
 ```
+
+The response shows the off-ramp fee and the token amount sent.
 
 For multisig transactions, gas can only be refreshed when exactly one signer remains. `transactions sign` requires a local EOA (see "Local signing key" above) and that the address is already an authorized signer on the transaction's smart account.
 
