@@ -1349,7 +1349,7 @@ accounts.command("update-signers", {
     "On a multisig, run 'transactions update-gas-estimation <id>' before the last signature. " +
     "Size thresholds assuming any threshold-meeting signer set, agent keys included, can change signers. " +
     "Poll 'transactions get <id>' to watch status transition from CREATED to EXECUTED. " +
-    "If this returns 409 SMART_ACCOUNT_STATE_CHANGE_IN_PROGRESS, call 'transactions list --account <address>' " +
+    "If this returns 400 SMART_ACCOUNT_MERKLE_TRANSACTION_IN_PROGRESS, call 'transactions list --account <address>' " +
     "to find the pending proposal; it must be signed or cancelled before retrying. " +
     "Recovery / resetting signers stays web-only — no CLI or API route exists. " +
     "(Recovery is the owning account's contract-enforced right — see 'splits accounts'; the root account " +
