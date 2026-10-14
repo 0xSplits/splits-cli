@@ -1327,12 +1327,12 @@ accounts.command("update-signers", {
     "its id here. The same id can be attached to any number of accounts. " +
     "Primary use case: adding an external (EOA) key so an agent or automation can operate on the account headlessly " +
     "— passkeys require a biometric 2nd factor that agents cannot provide. " +
-    "The proposal is created immediately; it must be approved and signed on the web via the returned signUrl. " +
-    "(The web-approval step is platform policy, not onchain enforcement — size thresholds assuming any " +
-    "threshold-meeting signer set can change signers.) " +
+    "The proposal is created immediately. Sign it on the web via the returned signUrl, or with " +
+    "'transactions sign <id>' from a local key that is already a signer on the account. " +
+    "On a multisig, run 'transactions update-gas-estimation <id>' before the last signature. " +
     "Poll 'transactions get <id>' to watch status transition from CREATED to EXECUTED. " +
     "If this returns 409 SMART_ACCOUNT_STATE_CHANGE_IN_PROGRESS, call 'transactions list --account <address>' " +
-    "to find the pending proposal; it must be signed (web) or cancelled before retrying. " +
+    "to find the pending proposal; it must be signed or cancelled before retrying. " +
     "Recovery / resetting signers stays web-only — no CLI or API route exists. " +
     "(Recovery is the owning account's contract-enforced right — see 'splits accounts'; the root account " +
     "has no owner and cannot be recovered from above.) " +
@@ -1404,6 +1404,39 @@ accounts.command("update-signers", {
       "/proposals/update_signers",
       { method: "POST", body },
     );
+  },
+});
+
+accounts.command("add-networks", {
+  description:
+    "Add networks to every account in the org. Networks already on the org are kept. " +
+    "When an account needs an onchain change on a new network (a deployment or a signer sync), " +
+    "this creates one proposal that covers every network: it returns networksAdded false and the proposal. " +
+    "The proposal sits on the Treasury account, or on the Root account when the Treasury itself needs an update; " +
+    "check 'accounts signers <address>' on that account before signing. " +
+    "Sign it on the web via the returned signUrl, or with 'transactions sign <id>' from a local key that is a signer on that account. " +
+    "On a multisig, run 'transactions update-gas-estimation <id>' before the last signature. " +
+    "When no onchain change is needed, the networks are added right away and networksAdded is true. " +
+    "Use 'chains list' for the supported chain ids and 'accounts chains <address>' for the current ones. " +
+    "Returns 409 SMART_ACCOUNT_STATE_CHANGE_IN_PROGRESS while another signer or network change is pending. " +
+    "Requires owner-scoped API key.",
+  env: authEnv,
+  options: workspaceOption.extend({
+    chainIds: z
+      .string()
+      .describe("Comma-separated chain ids to add (e.g. '10,42161')"),
+    memo: z.string().optional().describe("Optional memo (max 500 chars)"),
+  }),
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
+    const body = {
+      chainIds: parseChainIds(options.chainIds),
+      ...(options.memo !== undefined && { memo: options.memo }),
+    };
+    return apiRequest(env, "/proposals/add_networks", {
+      method: "POST",
+      body,
+    });
   },
 });
 
@@ -2559,7 +2592,9 @@ transactions.command(properties);
 
 transactions.command("update-gas-estimation", {
   description:
-    "Update gas estimates for an existing transaction. For multisig, run this when one signer remains.",
+    "Update gas estimates for an existing transaction. For multisig, run this when one signer remains: " +
+    "it rotates the signingHash to the one the last signer must sign, including on a signer or network change proposal. " +
+    "The response's gasEstimates is null for those proposals, whose gas is estimated per network.",
   env: authEnv,
   options: workspaceOption,
   args: z.object({
@@ -3055,7 +3090,10 @@ transactions.command("sign", {
     "Fetches the transaction's signingHash, produces a personal_sign signature locally, " +
     "and submits it via POST /public/v1/transactions/:id/sign. " +
     "By default auto-submits the UserOp when this signature meets threshold; " +
-    "pass --no-submit to record only. Retries once on a stale signer nonce.",
+    "pass --no-submit to record only. Retries once on a stale signer nonce. " +
+    "A signer or network change proposal ('accounts update-signers', 'accounts add-networks') submits on every network at once. " +
+    "On a multisig, run 'transactions update-gas-estimation <id>' before the last signature; " +
+    "otherwise the sign is rejected because the signingHash is stale.",
   env: authEnv,
   args: z.object({
     id: transactionId.describe("Transaction ID to sign"),

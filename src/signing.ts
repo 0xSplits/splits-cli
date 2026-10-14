@@ -37,7 +37,7 @@ const fetchSigningHash = async (
     throw new SplitsApiError(
       "transaction-not-cli-signable",
       0,
-      "This transaction does not expose a signingHash (e.g. merkle or deploy paths). Sign via the web app.",
+      "This transaction does not expose a signingHash (e.g. some deploy paths). Sign via the web app.",
     );
   }
   if (typeof hash !== "string" || !SIGNING_HASH_RE.test(hash)) {
