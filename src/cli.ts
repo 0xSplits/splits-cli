@@ -1330,6 +1330,7 @@ accounts.command("update-signers", {
     "The proposal is created immediately. Sign it on the web via the returned signUrl, or with " +
     "'transactions sign <id>' from a local key that is already a signer on the account. " +
     "On a multisig, run 'transactions update-gas-estimation <id>' before the last signature. " +
+    "Size thresholds assuming any threshold-meeting signer set, agent keys included, can change signers. " +
     "Poll 'transactions get <id>' to watch status transition from CREATED to EXECUTED. " +
     "If this returns 409 SMART_ACCOUNT_STATE_CHANGE_IN_PROGRESS, call 'transactions list --account <address>' " +
     "to find the pending proposal; it must be signed or cancelled before retrying. " +
