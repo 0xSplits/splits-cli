@@ -24,7 +24,7 @@ export type AgentLoginGrant = {
 };
 
 export type FinishedAgentLogin =
-  | { status: "denied"; reason: "person" | "wrong_code" }
+  | { status: "denied"; reason: "person_declined" | "wrong_code" }
   | { status: "consumed" | "expired" }
   | ({ status: "approved" } & AgentLoginGrant);
 
