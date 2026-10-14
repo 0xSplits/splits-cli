@@ -8,6 +8,7 @@ import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 
 import {
   type AgentLoginGrant,
+  type FinishedAgentLogin,
   type CreateWorkspacePrefill,
   describeCreatedWorkspace,
   openInBrowser,
@@ -362,6 +363,9 @@ const loginSigner = async (address: string | undefined) => {
   return { account: privateKeyToAccount(freshPrivateKey), freshPrivateKey };
 };
 
+const WRONG_CODE_DENIAL_MESSAGE =
+  "The code was entered wrong too many times in the browser. Start a new login with `splits auth login`.";
+
 const LOGIN_OUTCOME_MESSAGE_BY_STATUS = {
   denied: "The login request was denied in the browser.",
   expired:
@@ -370,6 +374,13 @@ const LOGIN_OUTCOME_MESSAGE_BY_STATUS = {
     "The API key for this login was already collected, possibly by this command after a network error. " +
       "Start a new one with `splits auth login`.",
 } as const;
+
+const loginOutcomeMessage = (
+  result: Exclude<FinishedAgentLogin, { status: "approved" }>,
+): string =>
+  result.status === "denied" && result.reason === "wrong_code"
+    ? WRONG_CODE_DENIAL_MESSAGE
+    : LOGIN_OUTCOME_MESSAGE_BY_STATUS[result.status];
 
 const saveApprovedLogin = async ({
   grant,
@@ -455,7 +466,7 @@ const runBrowserLogin = async ({
   });
   process.stderr.write(
     `Approve this login in your browser:\n  ${started.url}\n` +
-      `The page should show this agent key: ${account.address}\n` +
+      `Enter this code on the page: ${started.code}\n` +
       `Waiting for approval until ${started.expiresAt}...\n`,
   );
   openInBrowser(started.url);
@@ -471,7 +482,7 @@ const runBrowserLogin = async ({
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   });
   if (result.status !== "approved") {
-    throw new Error(LOGIN_OUTCOME_MESSAGE_BY_STATUS[result.status]);
+    throw new Error(loginOutcomeMessage(result));
   }
 
   const saved = await saveApprovedLogin({
@@ -521,10 +532,11 @@ const startPendingLogin = async ({
   return {
     requestId: started.requestId,
     url: started.url,
+    code: started.code,
     expiresAt: started.expiresAt,
     signerAddress: account.address,
     next:
-      `Show the person the URL and ask them to check that the page shows the agent key ${account.address} ` +
+      `Show the person the URL and the code ${started.code}, and ask them to enter the code on the page ` +
       "and approve. Then run `splits auth login-status` right away: it waits for the approval.",
   };
 };
@@ -582,8 +594,9 @@ auth.command("login", {
     "waits up to 10 minutes for the approval, and saves the key it receives. The key never appears " +
     "in the output. With a key, the key is checked against the API first. The workspace is named " +
     "after its org unless --name is given; logging in again to the same org refreshes that workspace. " +
-    "Other workspaces and local keys are never removed. Under MCP, use `auth login-start` and " +
-    "`auth login-status` instead. " +
+    "Other workspaces and local keys are never removed. The browser login prints a code that the person " +
+    "must type on the page, so an agent that cannot show the person this command's output while it waits " +
+    "(under MCP, or running it in a shell tool) uses `auth login-start` and `auth login-status` instead. " +
     "Saved keys are only used when the SPLITS_API_KEY env var is not set — env always wins.",
   env: authEnv,
   options: browserLoginOptions.extend({
@@ -672,7 +685,8 @@ auth.command("login-start", {
     "Pass clientName with the product name of the app the person is using to talk to you " +
     "(for example Claude Code), not the model name. " +
     "Proves a new local key (or the one given with key), opens the approval page, and returns " +
-    "its URL. Show the person the URL, then call `auth login-status` right away without waiting for " +
+    "its URL and a code. Show the person the URL and the code, which they enter on the page, then call " +
+    "`auth login-status` right away without waiting for " +
     "them to reply: it waits while they log in and approve (connect a workspace or create one). " +
     "The request expires after 10 minutes.",
   env: authEnv,
@@ -724,7 +738,7 @@ auth.command("login-status", {
       return {
         status: result.status,
         requestId: pending.requestId,
-        message: LOGIN_OUTCOME_MESSAGE_BY_STATUS[result.status],
+        message: loginOutcomeMessage(result),
       };
     }
 
@@ -1042,8 +1056,9 @@ workspace.command("create", {
     "this agent's local key, and which is the workspace's deposit address. " +
     "The person can also connect an existing workspace instead. On approval the API key is saved as a " +
     "new workspace and made active; the key never appears in the output. " +
-    "Outside MCP the command waits up to 10 minutes for the approval and prints a diagram of the accounts. " +
-    "Under MCP it returns the approval URL without waiting: show it to the person, then call " +
+    "The person must enter a code on the page. Outside MCP the command prints the code, waits up to " +
+    "10 minutes for the approval and prints a diagram of the accounts. " +
+    "Under MCP it returns the approval URL and the code without waiting: show both to the person, then call " +
     "`auth login-status` right away, which waits for the approval, saves the workspace and returns the diagram. " +
     "Use this rather than `org create` when this agent will work in the new workspace: `org create` only " +
     "emails the person a setup link and gives this agent no API key and no signer.",
