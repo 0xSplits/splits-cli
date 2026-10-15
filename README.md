@@ -26,14 +26,22 @@ npx @splits/splits-cli <command>
 splits auth login --client-name "Claude Code"
 ```
 
-With no key on the flag or stdin, `auth login` proves a new signing key, opens an approval page in the browser and waits up to 10 minutes. The person logs in to Splits and either connects an existing workspace, choosing the key's permissions, or creates a new workspace. A new workspace has the person's login email as the recovery signer on the root account and this CLI's local key as the only signer of the treasury. The API key goes straight into the local config; it never appears in the output. `--client-name` is required: it is the name of the agent asking for access, which the person sees on the approval page and which names the API key. The new key is saved under the workspace's name only when the person creates a workspace; after a connect it is dropped. Pass `--key <address>` to prove a saved key instead, for example to make it the treasury signer.
+With no key on the flag or stdin, `auth login` proves a new signing key, opens an approval page in the browser, prints a code and waits up to 10 minutes. The person logs in to Splits, enters the code, and either connects an existing workspace, choosing the key's permissions, or creates a new workspace. A new workspace has the person's login email as the recovery signer on the root account and this CLI's local key as the only signer of the treasury. The API key goes straight into the local config; it never appears in the output. `--client-name` is required: it is the name of the agent asking for access, which the person sees on the approval page and which names the API key. The new key is saved under the workspace's name only when the person creates a workspace; after a connect it is dropped. Pass `--key <address>` to prove a saved key instead, for example to make it the treasury signer.
 
-Agents that cannot wait on one command, such as MCP clients, split the same flow in two:
+The person must type the printed code on the page. Agents that cannot show the person a command's output while it waits, such as MCP clients or an agent running the CLI in a shell tool, split the same flow in two:
 
 ```sh
-splits auth login-start --client-name "Claude Code"   # returns the approval URL
-splits auth login-status                              # checks once; saves the workspace once approved
+splits auth login-start --client-name "Claude Code"   # returns the approval URL and the code to show the person
+splits auth login-status                              # waits for the approval, then saves the workspace
 ```
+
+**New workspace** for an agent that has none yet:
+
+```sh
+splits workspace create --name "Acme" --chain-ids 8453,1 --client-name "Claude Code"
+```
+
+The same browser login, with the approval page opened on its create tab and prefilled with the name and chains (`--chain-ids` defaults to the chains a new workspace gets in the app). The person approves as the owner. Their login email is the only signer of the root account, which owns the treasury; this CLI's local key is the only signer of the treasury, which is the deposit address on every chosen chain. The key is saved as a new active workspace and a diagram of the accounts is printed. Under MCP the tool returns the approval URL and the code without waiting; `auth login-status` then waits for the approval and saves the workspace.
 
 Or bring an API key from [Splits Settings](https://app.splits.org/settings/team/api-keys/). Two options:
 
@@ -156,6 +164,14 @@ splits transactions create earn-withdraw --account 0x... --chain-id 8453 \
   --asset 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 --amount 25 \
   --pause-auto-earn-seconds 3600
 
+# Off-ramp to a bank account (amount is the fiat the bank receives; the fee is added on top)
+splits offramp external-accounts
+splits transactions create offramp --account 0x... \
+  --external-account-id <id> --amount 100
+# Pay it from Earn USDC (or any other token) in the same proposal
+splits transactions create offramp --account 0x... \
+  --external-account-id <id> --amount 100 --source-token <earn-usdc-address>
+
 # Propose a swap (amount is in sellToken units; slippage defaults per pair like the web app)
 splits transactions create swap --account 0x... --chain-id 8453 \
   --sell-token 0x4200000000000000000000000000000000000006 \
@@ -170,6 +186,8 @@ splits transactions create swap --account 0x... --chain-id 8453 --destination-ch
   --sell-token 0x4200000000000000000000000000000000000006 \
   --buy-token 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 --amount 0.5
 ```
+
+The response shows the off-ramp fee and the token amount sent.
 
 For multisig transactions, gas can only be refreshed when exactly one signer remains. `transactions sign` requires a local EOA (see "Local signing key" above) and that the address is already an authorized signer on the transaction's smart account.
 
@@ -363,6 +381,7 @@ The MCP server exposes these tools:
 - `auth_whoami` — Show org, workspace, API key source, and local signing keys
 - `auth_login` / `auth_logout` — Save or remove a workspace (stdin-preferred; `--api-key` flag refused under MCP)
 - `auth_login-start` / `auth_login-status` — Log in through a browser approval without the API key passing through the conversation
+- `workspace_create` — Create a new workspace through a browser approval: the person's email holds the root, this agent's key the treasury
 - `auth_workspaces` / `auth_use` — List saved workspaces, switch the active one
 - `auth_create_key` / `auth_delete_key` / `auth_import_key` — Manage local EOA signing keys
 

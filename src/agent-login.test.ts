@@ -99,14 +99,14 @@ describe("browser login", () => {
       poll: async () => {
         const failure = failures.shift();
         if (failure) throw failure;
-        return { status: "denied" };
+        return { status: "denied", reason: "person_declined" };
       },
       expiresAt: new Date(clock.now() + 600_000).toISOString(),
       sleep: clock.sleep,
       now: clock.now,
     });
 
-    assert.deepEqual(result, { status: "denied" });
+    assert.deepEqual(result, { status: "denied", reason: "person_declined" });
   });
 
   it("stops on an error that waiting cannot fix", async () => {

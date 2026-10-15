@@ -8,6 +8,8 @@ import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 
 import {
   type AgentLoginGrant,
+  type FinishedAgentLogin,
+  type CreateWorkspacePrefill,
   describeCreatedWorkspace,
   openInBrowser,
   pollAgentLogin,
@@ -175,6 +177,20 @@ const splitCsv = (s: string | undefined): string[] =>
         .map((x) => x.trim())
         .filter(Boolean)
     : [];
+
+const parseChainIds = (csv: string): number[] => {
+  const chainIds = splitCsv(csv).map((id) => {
+    const parsed = Number(id);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+      throw new Error(`Invalid chain id: ${id}`);
+    }
+    return parsed;
+  });
+  if (chainIds.length === 0) {
+    throw new Error("--chain-ids must name at least one chain.");
+  }
+  return chainIds;
+};
 
 // Helper: refine a CSV string so each comma-separated token is a valid EVM
 // address. Fails client-side before the HTTP call. Uses superRefine so the
@@ -347,6 +363,9 @@ const loginSigner = async (address: string | undefined) => {
   return { account: privateKeyToAccount(freshPrivateKey), freshPrivateKey };
 };
 
+const WRONG_CODE_DENIAL_MESSAGE =
+  "The code was entered wrong too many times in the browser. Start a new login with `splits auth login`.";
+
 const LOGIN_OUTCOME_MESSAGE_BY_STATUS = {
   denied: "The login request was denied in the browser.",
   expired:
@@ -355,6 +374,13 @@ const LOGIN_OUTCOME_MESSAGE_BY_STATUS = {
     "The API key for this login was already collected, possibly by this command after a network error. " +
       "Start a new one with `splits auth login`.",
 } as const;
+
+const loginOutcomeMessage = (
+  result: Exclude<FinishedAgentLogin, { status: "approved" }>,
+): string =>
+  result.status === "denied" && result.reason === "wrong_code"
+    ? WRONG_CODE_DENIAL_MESSAGE
+    : LOGIN_OUTCOME_MESSAGE_BY_STATUS[result.status];
 
 const saveApprovedLogin = async ({
   grant,
@@ -416,6 +442,105 @@ const saveApprovedLogin = async ({
   };
 };
 
+const runBrowserLogin = async ({
+  env,
+  apiUrl,
+  key,
+  clientName,
+  name,
+  createWorkspace,
+}: {
+  env: z.infer<typeof authEnv>;
+  apiUrl: string | undefined;
+  key: string | undefined;
+  clientName: string;
+  name: string | undefined;
+  createWorkspace?: CreateWorkspacePrefill;
+}) => {
+  const { account, freshPrivateKey } = await loginSigner(key);
+  const started = await startAgentLogin({
+    apiUrl: apiUrl ?? DEFAULT_API_URL,
+    signer: account,
+    clientName,
+    createWorkspace,
+  });
+  process.stderr.write(
+    `Approve this login in your browser:\n  ${started.url}\n` +
+      `Enter this code on the page: ${started.code}\n` +
+      `Waiting for approval until ${started.expiresAt}...\n`,
+  );
+  openInBrowser(started.url);
+
+  const result = await waitForAgentLogin({
+    poll: () =>
+      pollAgentLogin({
+        apiUrl: apiUrl ?? DEFAULT_API_URL,
+        requestId: started.requestId,
+        codeVerifier: started.codeVerifier,
+      }),
+    expiresAt: started.expiresAt,
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  });
+  if (result.status !== "approved") {
+    throw new Error(loginOutcomeMessage(result));
+  }
+
+  const saved = await saveApprovedLogin({
+    grant: result,
+    apiUrl,
+    name,
+    signerAddress: account.address,
+    freshPrivateKey,
+  });
+  if (saved.diagram !== null) process.stderr.write(`${saved.diagram}\n`);
+  warnIfEnvKeySet(env);
+  return { ...saved, signerAddress: account.address };
+};
+
+const startPendingLogin = async ({
+  apiUrl,
+  key,
+  clientName,
+  name,
+  createWorkspace,
+}: {
+  apiUrl: string | undefined;
+  key: string | undefined;
+  clientName: string;
+  name: string | undefined;
+  createWorkspace?: CreateWorkspacePrefill;
+}) => {
+  const { account, freshPrivateKey } = await loginSigner(key);
+  const started = await startAgentLogin({
+    apiUrl: apiUrl ?? DEFAULT_API_URL,
+    signer: account,
+    clientName,
+    createWorkspace,
+  });
+  await savePendingLogin({
+    requestId: started.requestId,
+    codeVerifier: started.codeVerifier,
+    url: started.url,
+    apiUrl: apiUrl ?? null,
+    expiresAt: started.expiresAt,
+    name: name ?? null,
+    signerAddress: account.address,
+    freshPrivateKey,
+    startedAt: new Date().toISOString(),
+  });
+  openInBrowser(started.url);
+  return {
+    requestId: started.requestId,
+    url: started.url,
+    code: started.code,
+    expiresAt: started.expiresAt,
+    signerAddress: account.address,
+    next:
+      `Show the person the URL and the code ${started.code}, and ask them to enter the code on the page ` +
+      "and approve. Then run `splits auth login-status` right away: it waits for the approval.",
+  };
+};
+
 const loginOptions = z.object({
   apiUrl: z
     .string()
@@ -469,8 +594,9 @@ auth.command("login", {
     "waits up to 10 minutes for the approval, and saves the key it receives. The key never appears " +
     "in the output. With a key, the key is checked against the API first. The workspace is named " +
     "after its org unless --name is given; logging in again to the same org refreshes that workspace. " +
-    "Other workspaces and local keys are never removed. Under MCP, use `auth login-start` and " +
-    "`auth login-status` instead. " +
+    "Other workspaces and local keys are never removed. The browser login prints a code that the person " +
+    "must type on the page, so an agent that cannot show the person this command's output while it waits " +
+    "(under MCP, or running it in a shell tool) uses `auth login-start` and `auth login-status` instead. " +
     "Saved keys are only used when the SPLITS_API_KEY env var is not set — env always wins.",
   env: authEnv,
   options: browserLoginOptions.extend({
@@ -513,43 +639,13 @@ auth.command("login", {
             'for example `splits auth login --client-name "Claude Code"`. The person sees it on the approval page.',
         );
       }
-      const { account, freshPrivateKey } = await loginSigner(options.key);
-      const started = await startAgentLogin({
-        apiUrl: apiUrl ?? DEFAULT_API_URL,
-        signer: account,
-        clientName: options.clientName,
-      });
-      process.stderr.write(
-        `Approve this login in your browser:\n  ${started.url}\n` +
-          `The page should show this agent key: ${account.address}\n` +
-          `Waiting for approval until ${started.expiresAt}...\n`,
-      );
-      openInBrowser(started.url);
-
-      const result = await waitForAgentLogin({
-        poll: () =>
-          pollAgentLogin({
-            apiUrl: apiUrl ?? DEFAULT_API_URL,
-            requestId: started.requestId,
-            codeVerifier: started.codeVerifier,
-          }),
-        expiresAt: started.expiresAt,
-        sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-      });
-      if (result.status !== "approved") {
-        throw new Error(LOGIN_OUTCOME_MESSAGE_BY_STATUS[result.status]);
-      }
-
-      const saved = await saveApprovedLogin({
-        grant: result,
+      return runBrowserLogin({
+        env,
         apiUrl,
+        key: options.key,
+        clientName: options.clientName,
         name: options.name,
-        signerAddress: account.address,
-        freshPrivateKey,
       });
-      if (saved.diagram !== null) process.stderr.write(`${saved.diagram}\n`);
-      warnIfEnvKeySet(env);
-      return { ...saved, signerAddress: account.address };
     }
 
     const value = input.apiKey;
@@ -589,48 +685,29 @@ auth.command("login-start", {
     "Pass clientName with the product name of the app the person is using to talk to you " +
     "(for example Claude Code), not the model name. " +
     "Proves a new local key (or the one given with key), opens the approval page, and returns " +
-    "its URL. Ask the person to open the URL, log in and approve (connect a workspace or create one), " +
-    "then call `auth login-status`. The request expires after 10 minutes.",
+    "its URL and a code. Show the person the URL and the code, which they enter on the page, then call " +
+    "`auth login-status` right away without waiting for " +
+    "them to reply: it waits while they log in and approve (connect a workspace or create one). " +
+    "The request expires after 10 minutes.",
   env: authEnv,
   options: browserLoginOptions,
   async run({ env, options }) {
     if (options.name !== undefined) assertWorkspaceAlias(options.name);
-    const apiUrl = resolveLoginApiUrl(env, options.apiUrl);
-    const { account, freshPrivateKey } = await loginSigner(options.key);
-    const started = await startAgentLogin({
-      apiUrl: apiUrl ?? DEFAULT_API_URL,
-      signer: account,
+    return startPendingLogin({
+      apiUrl: resolveLoginApiUrl(env, options.apiUrl),
+      key: options.key,
       clientName: options.clientName,
+      name: options.name,
     });
-    await savePendingLogin({
-      requestId: started.requestId,
-      codeVerifier: started.codeVerifier,
-      url: started.url,
-      apiUrl: apiUrl ?? null,
-      expiresAt: started.expiresAt,
-      name: options.name ?? null,
-      signerAddress: account.address,
-      freshPrivateKey,
-      startedAt: new Date().toISOString(),
-    });
-    openInBrowser(started.url);
-    return {
-      requestId: started.requestId,
-      url: started.url,
-      expiresAt: started.expiresAt,
-      signerAddress: account.address,
-      next:
-        `Ask the person to open the URL, check that the page shows the agent key ${account.address}, ` +
-        "and approve. Then run `splits auth login-status`.",
-    };
   },
 });
 
 auth.command("login-status", {
   description:
-    "Check a browser login started by `auth login-start`, once. While it is pending, returns the URL " +
-    "again. Once approved, saves the API key as a workspace, makes it active, and returns the " +
-    "workspace (never the key). Denied and expired logins are returned as such and forgotten.",
+    "Wait for a browser login started by `auth login-start` or `workspace create` until the person " +
+    "approves or denies it, or it expires (10 minutes after it started). Once approved, saves the API key " +
+    "as a workspace, makes it active, and returns the workspace (never the key). Denied and expired " +
+    "logins are returned as such and forgotten. If this call is cut off, call it again to keep waiting.",
   env: authEnv,
   options: z.object({
     requestId: z
@@ -646,26 +723,22 @@ auth.command("login-status", {
       );
     }
 
-    const result = await pollAgentLogin({
-      apiUrl: pending.apiUrl ?? DEFAULT_API_URL,
-      requestId: pending.requestId,
-      codeVerifier: pending.codeVerifier,
+    const result = await waitForAgentLogin({
+      poll: () =>
+        pollAgentLogin({
+          apiUrl: pending.apiUrl ?? DEFAULT_API_URL,
+          requestId: pending.requestId,
+          codeVerifier: pending.codeVerifier,
+        }),
+      expiresAt: pending.expiresAt,
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     });
-    if (result.status === "pending") {
-      return {
-        status: result.status,
-        requestId: pending.requestId,
-        url: pending.url,
-        expiresAt: pending.expiresAt,
-      };
-    }
-
     if (result.status !== "approved") {
       await removePendingLogin(pending.requestId);
       return {
         status: result.status,
         requestId: pending.requestId,
-        message: LOGIN_OUTCOME_MESSAGE_BY_STATUS[result.status],
+        message: loginOutcomeMessage(result),
       };
     }
 
@@ -964,6 +1037,70 @@ auth.command("signers", {
 });
 
 cli.command(auth);
+
+// =============================================================================
+// Workspace
+// =============================================================================
+
+const workspace = Cli.create("workspace", {
+  description: "Create Splits workspaces.",
+});
+
+workspace.command("create", {
+  description:
+    "Create a new Splits workspace through the person's browser approval. Opens the approval page " +
+    "on its create tab, prefilled with the name and chains; the person logs in, can change them, and " +
+    "approves. The person becomes the workspace's owner. Two accounts are created, at the same " +
+    "address on every chosen chain: the root, whose only signer is the person's login email and which " +
+    "owns the treasury, so the person can always recover it; and the treasury, whose only signer is " +
+    "this agent's local key, and which is the workspace's deposit address. " +
+    "The person can also connect an existing workspace instead. On approval the API key is saved as a " +
+    "new workspace and made active; the key never appears in the output. " +
+    "The person must enter a code on the page. Outside MCP the command prints the code, waits up to " +
+    "10 minutes for the approval and prints a diagram of the accounts. " +
+    "Under MCP it returns the approval URL and the code without waiting: show both to the person, then call " +
+    "`auth login-status` right away, which waits for the approval, saves the workspace and returns the diagram. " +
+    "Use this rather than `org create` when this agent will work in the new workspace: `org create` only " +
+    "emails the person a setup link and gives this agent no API key and no signer.",
+  env: authEnv,
+  options: browserLoginOptions.omit({ name: true }).extend({
+    name: z
+      .string()
+      .trim()
+      .min(1)
+      .max(255)
+      .describe(
+        "Workspace name to prefill. The local workspace alias is derived from the name the person approves.",
+      ),
+    chainIds: z
+      .string()
+      .optional()
+      .describe(
+        "Comma-separated chain ids to prefill (e.g. '8453,1'). Defaults to the chains a new workspace gets in the app.",
+      ),
+  }),
+  async run({ env, options }) {
+    const apiUrl = resolveLoginApiUrl(env, options.apiUrl);
+    const createWorkspace = {
+      name: options.name,
+      chainIds:
+        options.chainIds === undefined
+          ? undefined
+          : parseChainIds(options.chainIds),
+    };
+    const login = {
+      apiUrl,
+      key: options.key,
+      clientName: options.clientName,
+      name: undefined,
+      createWorkspace,
+    };
+    if (mcpMode()) return startPendingLogin(login);
+    return runBrowserLogin({ env, ...login });
+  },
+});
+
+cli.command(workspace);
 
 // =============================================================================
 // accounts
@@ -1985,17 +2122,7 @@ imports.command("create", {
   }),
   async run({ env: processEnv, options }) {
     const env = await withWorkspace(processEnv, options);
-    const chainIds = splitCsv(options.chainIds).map((id) => {
-      const parsed = Number(id);
-      if (!Number.isInteger(parsed) || parsed <= 0) {
-        throw new Error(`Invalid chain id: ${id}`);
-      }
-      return parsed;
-    });
-
-    if (chainIds.length === 0) {
-      throw new Error("--chain-ids must name at least one chain.");
-    }
+    const chainIds = parseChainIds(options.chainIds);
 
     return apiRequest(env, "/accounting/imports", {
       method: "PUT",
@@ -2707,6 +2834,89 @@ create.command("earn-withdraw", {
   },
 });
 
+create.command("offramp", {
+  description:
+    "Create a proposal that off-ramps USDC or EURC to one of the org's bank accounts through Bridge. Pick the bank with `offramp external-accounts`; it sets the chain, token, and recipient. Specify amount as the fiat the bank receives (minimum 10); the proposal sends that plus the off-ramp fee, and returns both the fee and the token amount sent. If the account holds the token in Earn or holds another token, pass --source-token to pay with it in the same proposal. Requires an owner-scoped API key for an org owner. Returns the proposal with the fee, the token amount sent, and a signUrl.",
+  env: authEnv,
+  options: workspaceOption.extend({
+    account: z
+      .string()
+      .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid Ethereum address")
+      .describe(
+        "The smart account address to create the proposal from (0x-prefixed, 40 hex chars)",
+      ),
+    externalAccountId: z
+      .string()
+      .min(1)
+      .describe("The bank account id, from `offramp external-accounts`"),
+    amount: z
+      .string()
+      .regex(
+        /^(0|[1-9]\d*)(\.\d{1,2})?$/,
+        "Must be a positive decimal number with at most 2 decimal places",
+      )
+      .describe(
+        "The fiat amount the bank receives, in its currency (e.g. '100' for $100 or €100). Minimum 10",
+      ),
+    sourceToken: z
+      .string()
+      .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid token address")
+      .optional()
+      .describe(
+        "Optional token to pay with, like \"Pay with\" in the web app. Defaults to the bank account's token, a direct transfer. Any other token the account holds is swapped, or bridged when --source-chain-id differs. An Earn token pays from that Earn position",
+      ),
+    sourceChainId: z
+      .number()
+      .optional()
+      .describe(
+        "Optional chain of --source-token. Defaults to the bank account's chain. A different chain bridges the payment and requires --source-token",
+      ),
+    memo: z
+      .string()
+      .max(500)
+      .optional()
+      .describe("Optional memo for the transaction (max 500 chars)"),
+    properties: propertiesOptionSchema
+      .optional()
+      .describe(
+        'Optional custom JSON metadata. Total minified ≤ 500 chars. Used as the base; any --property overlays are applied on top. To load from a file, use shell substitution: --properties "$(cat props.json)"',
+      ),
+    property: z
+      .array(z.string())
+      .optional()
+      .describe(
+        "String key/value overlays for properties; repeatable. Splits on the first '='. Example: --property invoice=INV-42",
+      ),
+  }),
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
+    const properties =
+      options.properties !== undefined || options.property?.length
+        ? applyPropertyOverlays(
+            parsePropertiesOption(options.properties) ?? {},
+            options.property,
+          )
+        : undefined;
+    const body = {
+      account: options.account,
+      externalAccountId: options.externalAccountId,
+      amount: options.amount,
+      ...(options.sourceToken !== undefined && {
+        sourceToken: options.sourceToken,
+      }),
+      ...(options.sourceChainId !== undefined && {
+        sourceChainId: options.sourceChainId,
+      }),
+      ...(options.memo !== undefined && { memo: options.memo }),
+      ...(properties !== undefined && { properties }),
+    } satisfies Record<string, unknown>;
+    return apiRequest<{ data?: unknown }>(env, "/proposals/offramp", {
+      method: "POST",
+      body,
+    });
+  },
+});
+
 create.command("swap", {
   description:
     "Create a proposal, for a human signer to approve, that sells an exact amount of one token for another, like the swap form in the web app. Pass destinationChainId to receive buyToken on another chain, which bridges the swap. The server fetches the quote and builds the calls. Specify amount in human-readable sellToken units (e.g. '100' for 100 USDC). Returns the proposal with the quoted buy amount and a signUrl.",
@@ -3014,6 +3224,27 @@ contacts.command("lookup", {
 });
 
 cli.command(contacts);
+
+// =============================================================================
+// offramp
+// =============================================================================
+
+const offramp = Cli.create("offramp", {
+  description: "Off-ramp to the org's bank accounts",
+});
+
+offramp.command("external-accounts", {
+  description:
+    "List the bank accounts the org can off-ramp to, with the currency each receives and the chain and token the off-ramp sends. Pass an id to `transactions create offramp`. Requires an owner-scoped API key for an org owner.",
+  env: authEnv,
+  options: workspaceOption,
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
+    return apiRequest(env, "/offramp/external-accounts");
+  },
+});
+
+cli.command(offramp);
 
 // =============================================================================
 // tokens
