@@ -242,19 +242,6 @@ const normalizeDateInput = (value: string | undefined) => {
 
 // --period is shorthand for a start/end pair, so it cannot be combined with
 // explicit bounds.
-const parseTypedData = (json: string): Record<string, unknown> => {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(json);
-  } catch {
-    throw new Error("--typed-data must be valid JSON.");
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new Error("--typed-data must be a JSON object.");
-  }
-  return parsed as Record<string, unknown>;
-};
-
 const resolveDateRange = (options: {
   startDate?: string;
   endDate?: string;
@@ -1349,6 +1336,28 @@ accounts.command("create", {
   },
 });
 
+const typedDataOptionSchema = z.union([
+  z.record(z.string(), z.unknown()),
+  z.string(),
+]);
+
+const parseTypedData = (
+  value: z.infer<typeof typedDataOptionSchema>,
+): Record<string, unknown> => {
+  if (typeof value !== "string") return value;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error("--typed-data must be valid JSON.");
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("--typed-data must be a JSON object.");
+  }
+  return parsed as Record<string, unknown>;
+};
+
 accounts.command("sign-message", {
   description:
     "Sign a message as the smart account (ERC-1271) with a local EOA saved by " +
@@ -1383,8 +1392,7 @@ accounts.command("sign-message", {
       .regex(/^0x([a-fA-F0-9]{2})*$/)
       .optional()
       .describe("0x-prefixed bytes to sign with personal_sign"),
-    typedData: z
-      .string()
+    typedData: typedDataOptionSchema
       .optional()
       .describe(
         "EIP-712 typed data as JSON (domain, types, primaryType, message)",

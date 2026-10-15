@@ -173,6 +173,8 @@ export async function signMessageLocally(
         body: opts.create,
       });
 
+  if (message.data.signature !== null) return message;
+
   const signingHash = assertSigningHash({
     hash: message.data.signingHash,
     missingCode: "message-not-cli-signable",
@@ -193,12 +195,19 @@ export async function signMessageLocally(
       },
     );
   } catch (err) {
+    if (err instanceof SplitsApiError && err.splitsCode === "UNIQUE_SIGNER") {
+      return httpRequest<MessageResponse>(
+        env,
+        `${messagesPath}/${message.data.id}`,
+        { requireAuth: true },
+      );
+    }
     if (err instanceof SplitsApiError && err.splitsCode === "INVALID_SIGNER") {
       throw new SplitsApiError(
         "signer-not-authorized",
         err.status,
         `Local key ${account.address} is not a signer of account ${opts.address}. ` +
-          `Message ${message.data.id} was created and can be signed by another signer.`,
+          `Another signer can sign message ${message.data.id} with --id.`,
       );
     }
     throw err;
