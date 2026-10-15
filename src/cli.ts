@@ -3522,14 +3522,20 @@ automations.command("create", {
     }
 
     const outputPercent = outputs.reduce((sum, o) => sum + o.percent, 0);
+    const passThroughPercent =
+      options.forwarder !== undefined
+        ? 100
+        : (options.passThroughPercent ?? 100 - outputPercent);
+    if (passThroughPercent < 0 || passThroughPercent + outputPercent !== 100) {
+      throw new Error(
+        `The pass-through percent (${passThroughPercent}) plus the output percents (${outputPercent}) must equal 100.`,
+      );
+    }
     const policy = {
       version: 1,
       minimumThresholdUsd: options.minimumThresholdUsd,
       slippage: options.slippage,
-      passThroughPercent:
-        options.forwarder !== undefined
-          ? 100
-          : (options.passThroughPercent ?? 100 - outputPercent),
+      passThroughPercent,
       passThroughDestinationAddress:
         options.forwarder ?? options.passThroughDestinationAddress,
       outputs,
