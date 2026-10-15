@@ -128,6 +128,8 @@ splits transactions sign <transaction-id> --no-submit
 splits transactions sign <transaction-id> --key <address>
 ```
 
+Signer and network change proposals (`accounts update-signers`, `accounts add-networks`) sign the same way and execute on every network at once. On a multisig, the last signer runs `transactions update-gas-estimation <id>` first.
+
 ## Usage
 
 ### Transactions
@@ -141,7 +143,8 @@ splits transactions list --account 0x... --cursor <cursor>
 # Get a specific transaction
 splits transactions get <id>
 
-# Update gas estimates for an existing transaction
+# Update gas estimates for an existing transaction. On a multisig, run it
+# when one signer remains: it rotates the signingHash the last signer signs.
 splits transactions update-gas-estimation <id>
 
 # Sign a pending multisig transaction with the local EOA
@@ -268,6 +271,19 @@ splits accounts rename <address> --name "New Name"
 splits accounts create --name "Operations" --passkeyIds <id1>,<id2> --threshold 1
 splits accounts create --name "Ops"  --eoaSignerIds <eoa-id1>,<eoa-id2>     --threshold 2
 splits accounts create --name "Bots" --eoaAddresses 0xabc...,0xdef...        --threshold 1
+
+# List the networks enabled on the org, and any network addition still pending
+splits accounts networks
+
+# Add networks to every account in the org (requires owner-scoped API key).
+# Returns the proposal to sign, or networksAdded true when no onchain change is needed.
+splits accounts add-networks --chain-ids 10,42161
+
+# Remove networks (requires owner-scoped API key). Refused when the accounts
+# hold tokens there unless the flag is passed; the tokens come back when the
+# network is added again.
+splits accounts remove-networks --chain-ids 42161
+splits accounts remove-networks --chain-ids 42161 --confirm-funds-on-removed-networks
 ```
 
 ### Accounting
