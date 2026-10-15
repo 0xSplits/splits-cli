@@ -361,6 +361,17 @@ splits members list
 splits members signers <userId>
 ```
 
+### Settings
+
+```sh
+# Get the workspace name, memo requirement, and auto-earn state.
+# autoEarn lists enabledChainIds, eligibleChainIds (off but can be turned on),
+# and pendingTransactionId. Accounts enroll in the background, so one can read
+# as not earning for a while after its chain is enabled. autoEarn is null
+# until the workspace has a Treasury.
+splits settings get
+```
+
 ### Feedback
 
 ```sh

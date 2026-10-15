@@ -3474,7 +3474,8 @@ const settings = Cli.create("settings", {
 });
 
 settings.command("get", {
-  description: "Get your org's settings",
+  description:
+    "Get your org's settings: name, memo requirement, and auto-earn state (enabled and eligible chain ids, and any pending auto-earn transaction).",
   env: authEnv,
   options: workspaceOption,
   async run({ env: processEnv, options }) {
