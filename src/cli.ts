@@ -3461,7 +3461,7 @@ invoices.command("get", {
 
 invoices.command("create", {
   description:
-    "Create an invoice and email it to --payer-email right away. Without --payer-email, no email is sent. With --interval and --due-date-days, it also creates a schedule that emails a new invoice before each due date; when the first issue date is still in the future, only the schedule is created. Requires an owner-scoped key for an org owner and the Pro plan.",
+    "Create an invoice and email it to --payer-email right away. Without --payer-email, no email is sent. With --interval and --due-date-days, it also creates a schedule that emails a new invoice before each due date; when the first issue date is still in the future or the first due date has passed, only the schedule is created and the next daily run picks it up. Requires an owner-scoped key for an org owner and the Pro plan.",
   env: authEnv,
   options: workspaceOption.extend({
     accountAddress: evmAddress
