@@ -3259,7 +3259,7 @@ contacts.command("upsert", {
     "may send: a transfer must match one rule, and an empty list allows any token on any chain. " +
     "Omit --send-rules to keep the current rules; pass '[]' to clear them. Rules are either all networks " +
     "(tokenAddress null) or all tokens. The result lists the schedules the saved rules block. " +
-    "Requires a write-scoped API key.",
+    "Requires an owner-scoped API key.",
   env: authEnv,
   options: workspaceOption.extend({
     label: z.string().min(1).max(255).describe("Contact label"),

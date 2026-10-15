@@ -370,7 +370,7 @@ splits contacts upsert 0xabc... --label "Payroll" \
 splits contacts upsert 0xabc... --label "Payroll" --send-rules '[]'
 ```
 
-A transfer to a contact must match one of its send rules; a contact with no rules accepts any token on any chain. Rules are either all networks (`tokenAddress: null`) or all tokens, and native ETH is the zero address. The result lists `scheduleConflicts`, the schedules the saved rules now block; the contact is saved either way. One of the workspace's own accounts cannot be a contact. `contacts upsert` needs a write-scoped API key.
+A transfer to a contact must match one of its send rules; a contact with no rules accepts any token on any chain. Rules are either all networks (`tokenAddress: null`) or all tokens, and native ETH is the zero address. The result lists `scheduleConflicts`, the schedules the saved rules now block; the contact is saved either way. One of the workspace's own accounts cannot be a contact. `contacts upsert` needs an owner-scoped API key.
 
 ### Feedback
 
