@@ -3266,7 +3266,7 @@ contacts.command("upsert", {
     sendRules: sendRulesOptionSchema
       .optional()
       .describe(
-        'JSON array of send rules, e.g. \'[{"chainId":8453,"tokenAddress":null}]\'',
+        'JSON array of send rules, e.g. \'[{"chainId":8453,"tokenAddress":null}]\'. Native ETH is the zero address',
       ),
   }),
   args: z.object({

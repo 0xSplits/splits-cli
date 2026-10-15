@@ -345,6 +345,33 @@ splits members list
 splits members signers <userId>
 ```
 
+### Contacts
+
+```sh
+# Search or list contacts, each with its send rules
+splits contacts list
+splits contacts list --q treasury
+
+# Look up several addresses at once
+splits contacts lookup --addresses 0xabc...,0xdef...
+
+# Create a contact, or rename one and keep its send rules
+splits contacts upsert 0xabc... --label "Payroll"
+
+# Allow only Base and Ethereum, any token
+splits contacts upsert 0xabc... --label "Payroll" \
+  --send-rules '[{"chainId":8453,"tokenAddress":null},{"chainId":1,"tokenAddress":null}]'
+
+# Allow only USDC on Base
+splits contacts upsert 0xabc... --label "Payroll" \
+  --send-rules '[{"chainId":8453,"tokenAddress":"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"}]'
+
+# Remove every restriction
+splits contacts upsert 0xabc... --label "Payroll" --send-rules '[]'
+```
+
+A transfer to a contact must match one of its send rules; a contact with no rules accepts any token on any chain. Rules are either all networks (`tokenAddress: null`) or all tokens, and native ETH is the zero address. The result lists `scheduleConflicts`, the schedules the saved rules now block; the contact is saved either way. One of the workspace's own accounts cannot be a contact. `contacts upsert` needs a write-scoped API key.
+
 ## MCP Server (Claude Code)
 
 Register the CLI as an MCP server so Claude can use Splits tools directly:
@@ -370,6 +397,7 @@ The MCP server exposes these tools:
 - `accounts_create` — Create a new subaccount
 - `accounts_update_signers` — Propose adding/removing signers (EOA adds reference ids from `auth_register_signer`)
 - `transactions_sign` — Sign a pending multisig transaction with a local EOA
+- `contacts_upsert` — Create a contact or change its label and send rules
 - `auth_whoami` — Show org, workspace, API key source, and local signing keys
 - `auth_login` / `auth_logout` — Save or remove a workspace (stdin-preferred; `--api-key` flag refused under MCP)
 - `auth_login-start` / `auth_login-status` — Log in through a browser approval without the API key passing through the conversation
