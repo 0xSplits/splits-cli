@@ -388,6 +388,17 @@ splits contacts upsert 0xabc... --label "Payroll" --send-rules '[]'
 
 A transfer to a contact must match one of its send rules; a contact with no rules accepts any token on any chain. Rules are either all networks (`tokenAddress: null`) or all tokens, and native ETH is the zero address. The result lists `scheduleConflicts`, the schedules the saved rules now block; the contact is saved either way. One of the workspace's own accounts cannot be a contact. `contacts upsert` needs an owner-scoped API key.
 
+### Settings
+
+```sh
+# Get the workspace name, memo requirement, and auto-earn state.
+# autoEarn lists enabledChainIds, eligibleChainIds (off but can be turned on),
+# and pendingTransactionId. Accounts enroll in the background, so one can read
+# as not earning for a while after its chain is enabled. autoEarn is null
+# until the workspace has a Treasury.
+splits settings get
+```
+
 ### Feedback
 
 ```sh
