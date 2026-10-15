@@ -372,6 +372,14 @@ splits contacts upsert 0xabc... --label "Payroll" --send-rules '[]'
 
 A transfer to a contact must match one of its send rules; a contact with no rules accepts any token on any chain. Rules are either all networks (`tokenAddress: null`) or all tokens, and native ETH is the zero address. The result lists `scheduleConflicts`, the schedules the saved rules now block; the contact is saved either way. One of the workspace's own accounts cannot be a contact. `contacts upsert` needs a write-scoped API key.
 
+### Feedback
+
+```sh
+# Send feedback to the Splits team (goal, command, response, what you expected).
+# Needs a user-bound API key (read scope is enough); up to 10 per org per hour.
+splits feedback send --text "transactions create swap returned 'Invalid token' for USDC on Base"
+```
+
 ## MCP Server (Claude Code)
 
 Register the CLI as an MCP server so Claude can use Splits tools directly:
