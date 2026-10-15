@@ -345,6 +345,14 @@ splits members list
 splits members signers <userId>
 ```
 
+### Feedback
+
+```sh
+# Send feedback to the Splits team (goal, command, response, what you expected).
+# Needs a user-bound API key (read scope is enough); up to 10 per org per hour.
+splits feedback send --text "transactions create swap returned 'Invalid token' for USDC on Base"
+```
+
 ## MCP Server (Claude Code)
 
 Register the CLI as an MCP server so Claude can use Splits tools directly:
