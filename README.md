@@ -278,6 +278,12 @@ splits accounts networks
 # Add networks to every account in the org (requires owner-scoped API key).
 # Returns the proposal to sign, or networksAdded true when no onchain change is needed.
 splits accounts add-networks --chain-ids 10,42161
+
+# Remove networks (requires owner-scoped API key). Refused when the accounts
+# hold tokens there unless the flag is passed; the tokens come back when the
+# network is added again.
+splits accounts remove-networks --chain-ids 42161
+splits accounts remove-networks --chain-ids 42161 --confirm-funds-on-removed-networks
 ```
 
 ### Accounting

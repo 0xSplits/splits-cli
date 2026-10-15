@@ -1471,6 +1471,40 @@ accounts.command("add-networks", {
   },
 });
 
+accounts.command("remove-networks", {
+  description:
+    "Remove networks from every account in the org. Takes effect right away and needs no signature; nothing happens onchain. " +
+    "When the org's accounts hold tokens on a removed network, it is refused unless --confirm-funds-on-removed-networks is passed. " +
+    "Those tokens stay at the same addresses but are inaccessible in Splits until the network is added again with 'accounts add-networks'. " +
+    "Use 'accounts networks' for the networks enabled now. " +
+    "Returns 400 SMART_ACCOUNT_MERKLE_TRANSACTION_IN_PROGRESS while a signer or network change is pending. " +
+    "Requires owner-scoped API key.",
+  env: authEnv,
+  options: workspaceOption.extend({
+    chainIds: z
+      .string()
+      .describe("Comma-separated chain ids to remove (e.g. '10,42161')"),
+    confirmFundsOnRemovedNetworks: z
+      .boolean()
+      .default(false)
+      .describe(
+        "Remove networks even where the org's accounts hold tokens. Confirm with the user first.",
+      ),
+  }),
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
+    return apiRequest(env, "/org/networks/remove", {
+      method: "POST",
+      body: {
+        chainIds: parseChainIds(options.chainIds),
+        ...(options.confirmFundsOnRemovedNetworks && {
+          confirmFundsOnRemovedNetworks: true,
+        }),
+      },
+    });
+  },
+});
+
 cli.command(accounts);
 
 // =============================================================================
