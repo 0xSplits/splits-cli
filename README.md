@@ -188,9 +188,14 @@ splits transactions create swap --account 0x... --chain-id 8453 \
 splits transactions create swap --account 0x... --chain-id 8453 --destination-chain-id 1 \
   --sell-token 0x4200000000000000000000000000000000000006 \
   --buy-token 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 --amount 0.5
+
+# Propose raw EVM calls (pass the calls as one JSON array)
+splits transactions create custom --account 0x1111111111111111111111111111111111111111 \
+  --chain-id 1 \
+  --calls '[{"to":"0x2222222222222222222222222222222222222222","data":"0x","value":"0"}]'
 ```
 
-The response shows the off-ramp fee and the token amount sent.
+The off-ramp response shows the fee and the token amount sent.
 
 For multisig transactions, gas can only be refreshed when exactly one signer remains. `transactions sign` requires a local EOA (see "Local signing key" above) and that the address is already an authorized signer on the transaction's smart account.
 
