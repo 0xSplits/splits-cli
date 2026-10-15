@@ -3126,28 +3126,41 @@ create.command("custom", {
       .describe(
         "The chain ID where the smart account is deployed (e.g., 1 for Ethereum, 8453 for Base)",
       ),
-    calls: z
-      .array(
-        z.object({
-          to: z
-            .string()
-            .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid address")
-            .describe("Target contract address (0x-prefixed, 40 hex chars)"),
-          data: z
-            .string()
-            .regex(/^0x[a-fA-F0-9]*$/, "Invalid hex calldata")
-            .describe("Hex-encoded calldata (0x-prefixed)"),
-          value: z
-            .string()
-            .default("0")
-            .describe("Value in wei as a string (defaults to '0')"),
-        }),
-      )
-      .min(1)
-      .max(20)
-      .describe(
-        "Array of raw EVM calls to execute. Each call has 'to' (address), 'data' (hex calldata), and optional 'value' (wei as string)",
-      ),
+    calls: z.preprocess(
+      (value, ctx) => {
+        if (typeof value !== "string") return value;
+        try {
+          return JSON.parse(value) as unknown;
+        } catch {
+          ctx.addIssue({
+            code: "custom",
+            message: "--calls must be valid JSON containing an array of calls",
+          });
+          return z.NEVER;
+        }
+      },
+      z
+        .array(
+          z.object({
+            to: z
+              .string()
+              .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid address")
+              .describe("Target contract address (0x-prefixed, 40 hex chars)"),
+            data: z
+              .string()
+              .regex(/^0x[a-fA-F0-9]*$/, "Invalid hex calldata")
+              .describe("Hex-encoded calldata (0x-prefixed)"),
+            value: z
+              .string()
+              .default("0")
+              .describe("Value in wei as a string (defaults to '0')"),
+          }),
+        )
+        .min(1)
+        .max(20),
+    ).describe(
+      "Array of raw EVM calls; on the CLI, pass one JSON array. Each call has 'to' (address), 'data' (hex calldata), and optional 'value' (wei as string)",
+    ),
     memo: z
       .string()
       .max(500)
