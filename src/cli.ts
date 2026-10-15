@@ -3311,68 +3311,6 @@ contacts.command("lookup", {
   },
 });
 
-const sendRulesSchema = z.array(
-  z.object({
-    chainId: z.number().int(),
-    tokenAddress: evmAddress.nullable(),
-  }),
-);
-const sendRulesOptionSchema = z.union([sendRulesSchema, z.string()]);
-
-const parseSendRulesOption = (
-  value: z.infer<typeof sendRulesOptionSchema> | undefined,
-): z.infer<typeof sendRulesSchema> | undefined => {
-  if (value === undefined) return undefined;
-  if (typeof value !== "string") return value;
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    throw new Error("Invalid JSON array for --send-rules.");
-  }
-
-  const result = sendRulesSchema.safeParse(parsed);
-  if (!result.success) {
-    throw new Error(
-      '--send-rules must be a JSON array of { "chainId": number, "tokenAddress": "0x..." | null }.',
-    );
-  }
-  return result.data;
-};
-
-contacts.command("upsert", {
-  description:
-    "Create a contact or update its label and send rules. Send rules limit what a transfer to the address " +
-    "may send: a transfer must match one rule, and an empty list allows any token on any chain. " +
-    "Omit --send-rules to keep the current rules; pass '[]' to clear them. Rules are either all networks " +
-    "(tokenAddress null) or all tokens. The result lists the schedules the saved rules block. " +
-    "Requires an owner-scoped API key.",
-  env: authEnv,
-  options: workspaceOption.extend({
-    label: z.string().min(1).max(255).describe("Contact label"),
-    sendRules: sendRulesOptionSchema
-      .optional()
-      .describe(
-        'JSON array of send rules, e.g. \'[{"chainId":8453,"tokenAddress":null}]\'. Native ETH is the zero address',
-      ),
-  }),
-  args: z.object({
-    address: z.string().describe("Contact address (EVM or Solana)"),
-  }),
-  async run({ env: processEnv, args, options }) {
-    const env = await withWorkspace(processEnv, options);
-    return apiRequest(env, "/contacts", {
-      method: "PUT",
-      body: {
-        address: args.address,
-        label: options.label,
-        sendRules: parseSendRulesOption(options.sendRules),
-      },
-    });
-  },
-});
-
 cli.command(contacts);
 
 // =============================================================================
