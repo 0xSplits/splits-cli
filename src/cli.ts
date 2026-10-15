@@ -1440,7 +1440,7 @@ accounts.command("networks", {
 
 accounts.command("add-networks", {
   description:
-    "Add networks to every account in the org. Networks already on the org are kept, except one no longer supported. " +
+    "Add networks to every account in the org. Networks already on the org are kept. " +
     "When an account needs an onchain change on a new network (a deployment or a signer sync), " +
     "this creates one proposal that covers every network: it returns networksAdded false and the proposal. " +
     "The proposal sits on the Treasury account, or on the Root account when the Treasury itself needs an update; " +
