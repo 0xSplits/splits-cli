@@ -3472,6 +3472,41 @@ automations.command("list", {
 cli.command(automations);
 
 // =============================================================================
+// feedback
+// =============================================================================
+
+const feedback = Cli.create("feedback", {
+  description: "Feedback to the Splits team",
+});
+
+feedback.command("send", {
+  description:
+    "Send feedback to the Splits team about the API, this CLI, or the MCP server. " +
+    "Use it when a command fails in a way its help does not explain, a capability is missing, " +
+    "or a response is confusing. Include the goal, the command or request you ran, what came back, " +
+    "and what you expected. The Splits team gets it by email and can follow up with the user who owns the API key. " +
+    "Never include API keys, private keys, or other secrets.",
+  env: authEnv,
+  options: workspaceOption.extend({
+    text: z
+      .string()
+      .trim()
+      .min(1)
+      .max(5000)
+      .describe("The feedback: goal, command or request, response, and what was expected (max 5000 characters)"),
+  }),
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
+    return apiRequest(env, "/feedback", {
+      method: "POST",
+      body: { text: options.text },
+    });
+  },
+});
+
+cli.command(feedback);
+
+// =============================================================================
 // org (unauthenticated commands)
 // =============================================================================
 
