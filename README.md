@@ -380,6 +380,30 @@ splits members list
 splits members signers <userId>
 ```
 
+### Invoices
+
+```sh
+# List unpaid invoices
+splits invoices list --statuses unpaid
+
+# Get one invoice, with the url where the payer pays it
+splits invoices get <invoiceId>
+
+# Create an invoice for 1,500 USDC on Base and email it to the payer
+splits invoices create --payee-name "Acme Studio" --payer-name "Globex" \
+  --payer-email billing@globex.com --amount 1500 --chain-id 8453 \
+  --token-address 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 \
+  --due-date 2026-11-01T00:00:00Z
+
+# Bill monthly: each invoice is emailed 14 days before it is due
+splits invoices create --payee-name "Acme Studio" --payer-name "Globex" \
+  --payer-email billing@globex.com --amount 1500 --chain-id 8453 \
+  --token-address 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 \
+  --due-date 2026-11-01T00:00:00Z --interval MONTHLY --due-date-days 14
+```
+
+Creating an invoice emails the payer right away, so check the email before you run it. It needs an owner-scoped key for an org owner and a workspace on the Pro plan or higher, and each workspace can create up to 50 invoices per hour.
+
 ### Contacts
 
 ```sh
