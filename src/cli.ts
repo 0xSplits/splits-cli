@@ -2919,6 +2919,53 @@ create.command("earn-withdraw", {
   },
 });
 
+const autoEarnProposalOptions = workspaceOption.extend({
+  memo: z
+    .string()
+    .max(500)
+    .optional()
+    .describe("Optional memo for the transaction (max 500 chars)"),
+});
+
+const createAutoEarnProposal = async ({
+  env,
+  enabled,
+  options,
+}: {
+  env: Awaited<ReturnType<typeof withWorkspace>>;
+  enabled: boolean;
+  options: z.infer<typeof autoEarnProposalOptions>;
+}) =>
+  apiRequest<{ data?: unknown }>(env, "/proposals/auto_earn", {
+    method: "POST",
+    body: {
+      enabled,
+      ...(options.memo !== undefined && { memo: options.memo }),
+    },
+  });
+
+create.command("auto-earn-on", {
+  description:
+    "Create a proposal, for a human signer to approve, that turns auto-earn on for the whole workspace from the Treasury. It covers every network that qualifies now (autoEarn.eligibleChainIds in `settings get`); a background job then enrolls the Treasury and its operating accounts. Requires an org owner or a Treasury signer, and fails while another auto-earn proposal is pending. Returns the proposal with the chainIds it covers and a signUrl.",
+  env: authEnv,
+  options: autoEarnProposalOptions,
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
+    return createAutoEarnProposal({ env, enabled: true, options });
+  },
+});
+
+create.command("auto-earn-off", {
+  description:
+    "Create a proposal, for a human signer to approve, that turns auto-earn off for the whole workspace from the Treasury. It covers every network where auto-earn is on (autoEarn.enabledChainIds in `settings get`) and stops auto-earn on every account that has it. Requires an org owner or a Treasury signer, and fails while another auto-earn proposal is pending. Returns the proposal with the chainIds it covers and a signUrl.",
+  env: authEnv,
+  options: autoEarnProposalOptions,
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
+    return createAutoEarnProposal({ env, enabled: false, options });
+  },
+});
+
 create.command("offramp", {
   description:
     "Create a proposal that off-ramps USDC or EURC to one of the org's bank accounts through Bridge. Pick the bank with `offramp external-accounts`; it sets the chain, token, and recipient. Specify amount as the fiat the bank receives (minimum 10); the proposal sends that plus the off-ramp fee, and returns both the fee and the token amount sent. If the account holds the token in Earn or holds another token, pass --source-token to pay with it in the same proposal. Requires an owner-scoped API key for an org owner. Returns the proposal with the fee, the token amount sent, and a signUrl.",

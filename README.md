@@ -175,6 +175,10 @@ splits transactions create transfer --account 0x... --chain-id 8453 \
   --recipient 0x... --token 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 \
   --amount 25 --source-token <earn-vault-address-from-balances>
 
+# Turn workspace auto-earn on or off (one Treasury proposal for every network)
+splits transactions create auto-earn-on
+splits transactions create auto-earn-off --memo "Pause yield for the audit"
+
 # Off-ramp to a bank account (amount is the fiat the bank receives; the fee is added on top)
 splits offramp external-accounts
 splits transactions create offramp --account 0x... \
