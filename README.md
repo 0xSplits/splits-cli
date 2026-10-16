@@ -167,6 +167,14 @@ splits transactions create earn-withdraw --account 0x... --chain-id 8453 \
   --asset 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 --amount 25 \
   --pause-auto-earn-seconds 3600
 
+# Pay a recipient 25 USDC from Earn on Base in one proposal.
+# Find the Earn row for this account and chain. Use earn.assetAddress as
+# --token and earn.vaultAddress as --source-token.
+splits accounts balances 0x... --chain-ids 8453 --format json
+splits transactions create transfer --account 0x... --chain-id 8453 \
+  --recipient 0x... --token 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 \
+  --amount 25 --source-token <earn-vault-address-from-balances>
+
 # Off-ramp to a bank account (amount is the fiat the bank receives; the fee is added on top)
 splits offramp external-accounts
 splits transactions create offramp --account 0x... \
@@ -196,6 +204,8 @@ splits transactions create custom --account 0x1111111111111111111111111111111111
 ```
 
 The off-ramp response shows the fee and the token amount sent.
+
+For an Earn-funded transfer, `--amount` is the amount of the underlying token the recipient receives, not the number of vault shares spent. The proposal withdraws the required shares and pays the recipient; approve its `signUrl` or sign it with an authorized local EOA. Use `earn-withdraw` when you want the underlying token to remain in the smart account instead.
 
 For multisig transactions, gas can only be refreshed when exactly one signer remains. `transactions sign` requires a local EOA (see "Local signing key" above) and that the address is already an authorized signer on the transaction's smart account.
 
@@ -255,7 +265,7 @@ splits accounts get <address>
 # Get token balances. Earn vault rows carry an `earn` object with the
 # underlying asset and the amount the shares redeem for. The address is
 # auto-selected if the org has one account.
-splits accounts balances [address] --chainIds 8453,1
+splits accounts balances [address] --chain-ids 8453,1
 
 # List signers (passkeys + EOAs) and threshold for a subaccount
 splits accounts signers <address>
