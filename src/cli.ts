@@ -3593,7 +3593,7 @@ invoices.command("create", {
       .string()
       .datetime()
       .describe(
-        "Due date, ISO 8601 (e.g. 2026-11-01T00:00:00Z). With a schedule, the first due date.",
+        "Due date, ISO 8601 (e.g. 2026-11-01T00:00:00Z). With a schedule, the first due date. Dates count as UTC calendar days.",
       ),
     memo: z.string().optional().describe("Memo shown on the invoice"),
     allowFiatPayments: z
