@@ -2946,7 +2946,7 @@ const createAutoEarnProposal = async ({
 
 create.command("auto-earn-on", {
   description:
-    "Create a proposal, for a human signer to approve, that turns auto-earn on for the whole workspace from the Treasury. It covers every network that qualifies now (autoEarn.eligibleChainIds in `settings get`); a background job then enrolls the Treasury and its operating accounts. Requires an org owner or a Treasury signer, and fails while another auto-earn proposal is pending. Returns the proposal with a signUrl.",
+    "Create a proposal, for a human signer to approve, that turns auto-earn on for the whole workspace from the Treasury. It covers every network that qualifies now (autoEarn.eligibleChainIds in `settings get`); a background job then enrolls the Treasury and its operating accounts. Requires an org owner or a Treasury signer, and fails while another auto-earn proposal is pending. Returns the proposal with the chainIds it covers and a signUrl.",
   env: authEnv,
   options: autoEarnProposalOptions,
   async run({ env: processEnv, options }) {
@@ -2957,7 +2957,7 @@ create.command("auto-earn-on", {
 
 create.command("auto-earn-off", {
   description:
-    "Create a proposal, for a human signer to approve, that turns auto-earn off for the whole workspace from the Treasury. It covers every network where auto-earn is on (autoEarn.enabledChainIds in `settings get`) and stops auto-earn on every account that has it. Requires an org owner or a Treasury signer, and fails while another auto-earn proposal is pending. Returns the proposal with a signUrl.",
+    "Create a proposal, for a human signer to approve, that turns auto-earn off for the whole workspace from the Treasury. It covers every network where auto-earn is on (autoEarn.enabledChainIds in `settings get`) and stops auto-earn on every account that has it. Requires an org owner or a Treasury signer, and fails while another auto-earn proposal is pending. Returns the proposal with the chainIds it covers and a signUrl.",
   env: authEnv,
   options: autoEarnProposalOptions,
   async run({ env: processEnv, options }) {
