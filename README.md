@@ -250,6 +250,8 @@ splits transactions list --user-op-hash 0x1dfe...dcf
 
 Each row in the response includes a `direction` field (`inbound` or `outbound`) so you can verify the filter result. Splits-initiated transactions are always `outbound`. Each row also includes `transactionHash` and `userOpHash` (both nullable) so you can correlate splits records with explorers and bundler webhooks; the same two fields are returned by `splits transactions get`.
 
+Rows also say what the transaction does, as the web app shows it. `kind` is `transaction` or `transfer`, `types` lists the transaction types (e.g. `Swap`, `Transfer`), and `source` says where a proposal was created (`WEB`, `CLI`, `MCP`, `API`, `SC`, `WC`). `displayAmount` is the headline token amount. `metadata` is the stored transaction metadata, and `details` is the typed view: `operations` (swap, bridge, earn, transfer, claim, custom call or bank transfer, with token symbols and human-readable amounts), `recipients`, `balanceChanges` (indexed token movements once executed), `signatures`, `failure` and, for transfers, `onrampSource`. A signer or network change runs as one transaction per network: it has `isMultiNetwork: true`, null `chainId` and hashes, and `details.networks` with each network's status and hashes.
+
 `--period` is mutually exclusive with `--start-date` / `--end-date`. Valid period values: `thisWeek`, `thisMonth`, `thisYear`, `lastWeek`, `lastMonth`, `lastYear`, `last30Days`, `last90Days`, `last6Months`.
 
 ### Accounts
