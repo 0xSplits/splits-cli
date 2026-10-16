@@ -1198,7 +1198,9 @@ accounts.command("balances", {
 });
 
 accounts.command("chains", {
-  description: "List chains an account is deployed/synced on",
+  description:
+    "List every chain Splits supports, with whether this account's signers are in sync on each. " +
+    "For the networks enabled on the org, use 'accounts networks'.",
   env: authEnv,
   options: workspaceOption,
   args: z.object({
@@ -1462,12 +1464,13 @@ accounts.command("update-signers", {
     "its id here. The same id can be attached to any number of accounts. " +
     "Primary use case: adding an external (EOA) key so an agent or automation can operate on the account headlessly " +
     "— passkeys require a biometric 2nd factor that agents cannot provide. " +
-    "The proposal is created immediately; it must be approved and signed on the web via the returned signUrl. " +
-    "(The web-approval step is platform policy, not onchain enforcement — size thresholds assuming any " +
-    "threshold-meeting signer set can change signers.) " +
+    "The proposal is created immediately. Sign it on the web via the returned signUrl, or with " +
+    "'transactions sign <id>' from a local key that is already a signer on the account. " +
+    "On a multisig, run 'transactions update-gas-estimation <id>' before the last signature. " +
+    "Size thresholds assuming any threshold-meeting signer set, agent keys included, can change signers. " +
     "Poll 'transactions get <id>' to watch status transition from CREATED to EXECUTED. " +
-    "If this returns 409 SMART_ACCOUNT_STATE_CHANGE_IN_PROGRESS, call 'transactions list --account <address>' " +
-    "to find the pending proposal; it must be signed (web) or cancelled before retrying. " +
+    "If this returns 400 SMART_ACCOUNT_MERKLE_TRANSACTION_IN_PROGRESS, call 'transactions list --account <address>' " +
+    "to find the pending proposal; it must be signed or cancelled before retrying. " +
     "Recovery / resetting signers stays web-only — no CLI or API route exists. " +
     "(Recovery is the owning account's contract-enforced right — see 'splits accounts'; the root account " +
     "has no owner and cannot be recovered from above.) " +
@@ -1539,6 +1542,86 @@ accounts.command("update-signers", {
       "/proposals/update_signers",
       { method: "POST", body },
     );
+  },
+});
+
+accounts.command("networks", {
+  description:
+    "List the networks enabled on the org, which every account operates on. " +
+    "Also returns the add-networks proposal still pending, if any, with the chains it adds and its signUrl. " +
+    "Those chains join the list once the proposal executes.",
+  env: authEnv,
+  options: workspaceOption,
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
+    return apiRequest(env, "/org/networks");
+  },
+});
+
+accounts.command("add-networks", {
+  description:
+    "Add networks to every account in the org. Networks already on the org are kept. " +
+    "When an account needs an onchain change on a new network (a deployment or a signer sync), " +
+    "this creates one proposal that covers every network: it returns networksAdded false and the proposal. " +
+    "The proposal sits on the Treasury account, or on the Root account when the Treasury itself needs an update; " +
+    "check 'accounts signers <address>' on that account before signing. " +
+    "Sign it on the web via the returned signUrl, or with 'transactions sign <id>' from a local key that is a signer on that account. " +
+    "On a multisig, run 'transactions update-gas-estimation <id>' before the last signature. " +
+    "When no onchain change is needed, the networks are added right away and networksAdded is true. " +
+    "Use 'accounts networks' for the networks already enabled and 'chains list' for the supported ones. " +
+    "Returns 400 SMART_ACCOUNT_MERKLE_TRANSACTION_IN_PROGRESS while another signer or network change is pending. " +
+    "Requires owner-scoped API key.",
+  env: authEnv,
+  options: workspaceOption.extend({
+    chainIds: z
+      .string()
+      .describe("Comma-separated chain ids to add (e.g. '10,42161')"),
+    memo: z.string().optional().describe("Optional memo (max 500 chars)"),
+  }),
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
+    const body = {
+      chainIds: parseChainIds(options.chainIds),
+      ...(options.memo !== undefined && { memo: options.memo }),
+    };
+    return apiRequest(env, "/proposals/add_networks", {
+      method: "POST",
+      body,
+    });
+  },
+});
+
+accounts.command("remove-networks", {
+  description:
+    "Remove networks from every account in the org. Takes effect right away and needs no signature; nothing happens onchain. " +
+    "When the org's accounts hold tokens on a removed network, it is refused unless --confirm-funds-on-removed-networks is passed. " +
+    "Those tokens stay at the same addresses but are inaccessible in Splits until the network is added again with 'accounts add-networks'. " +
+    "Use 'accounts networks' for the networks enabled now. " +
+    "Returns 400 SMART_ACCOUNT_MERKLE_TRANSACTION_IN_PROGRESS while a signer or network change is pending. " +
+    "Requires owner-scoped API key.",
+  env: authEnv,
+  options: workspaceOption.extend({
+    chainIds: z
+      .string()
+      .describe("Comma-separated chain ids to remove (e.g. '10,42161')"),
+    confirmFundsOnRemovedNetworks: z
+      .boolean()
+      .default(false)
+      .describe(
+        "Remove networks even where the org's accounts hold tokens. Confirm with the user first.",
+      ),
+  }),
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
+    return apiRequest(env, "/org/networks/remove", {
+      method: "POST",
+      body: {
+        chainIds: parseChainIds(options.chainIds),
+        ...(options.confirmFundsOnRemovedNetworks && {
+          confirmFundsOnRemovedNetworks: true,
+        }),
+      },
+    });
   },
 });
 
@@ -2694,7 +2777,9 @@ transactions.command(properties);
 
 transactions.command("update-gas-estimation", {
   description:
-    "Update gas estimates for an existing transaction. For multisig, run this when one signer remains.",
+    "Update gas estimates for an existing transaction. For multisig, run this when one signer remains: " +
+    "it rotates the signingHash to the one the last signer must sign, including on a signer or network change proposal. " +
+    "The response's gasEstimates is null for those proposals, whose gas is estimated per network.",
   env: authEnv,
   options: workspaceOption,
   args: z.object({
@@ -3161,28 +3246,41 @@ create.command("custom", {
       .describe(
         "The chain ID where the smart account is deployed (e.g., 1 for Ethereum, 8453 for Base)",
       ),
-    calls: z
-      .array(
-        z.object({
-          to: z
-            .string()
-            .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid address")
-            .describe("Target contract address (0x-prefixed, 40 hex chars)"),
-          data: z
-            .string()
-            .regex(/^0x[a-fA-F0-9]*$/, "Invalid hex calldata")
-            .describe("Hex-encoded calldata (0x-prefixed)"),
-          value: z
-            .string()
-            .default("0")
-            .describe("Value in wei as a string (defaults to '0')"),
-        }),
-      )
-      .min(1)
-      .max(20)
-      .describe(
-        "Array of raw EVM calls to execute. Each call has 'to' (address), 'data' (hex calldata), and optional 'value' (wei as string)",
-      ),
+    calls: z.preprocess(
+      (value, ctx) => {
+        if (typeof value !== "string") return value;
+        try {
+          return JSON.parse(value) as unknown;
+        } catch {
+          ctx.addIssue({
+            code: "custom",
+            message: "--calls must be valid JSON containing an array of calls",
+          });
+          return z.NEVER;
+        }
+      },
+      z
+        .array(
+          z.object({
+            to: z
+              .string()
+              .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid address")
+              .describe("Target contract address (0x-prefixed, 40 hex chars)"),
+            data: z
+              .string()
+              .regex(/^0x[a-fA-F0-9]*$/, "Invalid hex calldata")
+              .describe("Hex-encoded calldata (0x-prefixed)"),
+            value: z
+              .string()
+              .default("0")
+              .describe("Value in wei as a string (defaults to '0')"),
+          }),
+        )
+        .min(1)
+        .max(20),
+    ).describe(
+      "Array of raw EVM calls; on the CLI, pass one JSON array. Each call has 'to' (address), 'data' (hex calldata), and optional 'value' (wei as string)",
+    ),
     memo: z
       .string()
       .max(500)
@@ -3273,7 +3371,10 @@ transactions.command("sign", {
     "Fetches the transaction's signingHash, produces a personal_sign signature locally, " +
     "and submits it via POST /public/v1/transactions/:id/sign. " +
     "By default auto-submits the UserOp when this signature meets threshold; " +
-    "pass --no-submit to record only. Retries once on a stale signer nonce.",
+    "pass --no-submit to record only. Retries once on a stale signer nonce. " +
+    "A signer or network change proposal ('accounts update-signers', 'accounts add-networks') submits on every network at once. " +
+    "On a multisig, run 'transactions update-gas-estimation <id>' before the last signature; " +
+    "otherwise the sign is rejected because the signingHash is stale.",
   env: authEnv,
   args: z.object({
     id: transactionId.describe("Transaction ID to sign"),
@@ -3506,7 +3607,8 @@ const settings = Cli.create("settings", {
 });
 
 settings.command("get", {
-  description: "Get your org's settings",
+  description:
+    "Get your org's settings: name, memo requirement, and auto-earn state (enabled and eligible chain ids, and any pending auto-earn transaction).",
   env: authEnv,
   options: workspaceOption,
   async run({ env: processEnv, options }) {
@@ -3536,6 +3638,41 @@ automations.command("list", {
 });
 
 cli.command(automations);
+
+// =============================================================================
+// feedback
+// =============================================================================
+
+const feedback = Cli.create("feedback", {
+  description: "Feedback to the Splits team",
+});
+
+feedback.command("send", {
+  description:
+    "Send feedback to the Splits team about the API, this CLI, or the MCP server. " +
+    "Use it when a command fails in a way its help does not explain, a capability is missing, " +
+    "or a response is confusing. Include the goal, the command or request you ran, what came back, " +
+    "and what you expected. The Splits team gets it by email and can follow up with the user who owns the API key. " +
+    "Never include API keys, private keys, or other secrets.",
+  env: authEnv,
+  options: workspaceOption.extend({
+    text: z
+      .string()
+      .trim()
+      .min(1)
+      .max(5000)
+      .describe("The feedback: goal, command or request, response, and what was expected (max 5000 characters)"),
+  }),
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
+    return apiRequest(env, "/feedback", {
+      method: "POST",
+      body: { text: options.text },
+    });
+  },
+});
+
+cli.command(feedback);
 
 // =============================================================================
 // org (unauthenticated commands)

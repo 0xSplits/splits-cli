@@ -58,7 +58,7 @@ const fetchSigningHash = async (
     hash: tx.data.signingHash,
     missingCode: "transaction-not-cli-signable",
     missingMessage:
-      "This transaction does not expose a signingHash (e.g. merkle or deploy paths). Sign via the web app.",
+      "This transaction does not expose a signingHash (e.g. some deploy paths). Sign via the web app.",
   });
 };
 
