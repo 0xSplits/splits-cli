@@ -56,6 +56,7 @@ const { version: cliVersion } = JSON.parse(
 const cli = Cli.create("splits", {
   version: cliVersion,
   description: "Splits CLI — programmatic access to the Splits platform",
+  mcp: { command: "npx -y @splits/splits-cli --mcp" },
 });
 
 // Auth config (reads from env; both values also resolvable from a workspace
@@ -3423,7 +3424,11 @@ chains.command("get", {
   env: authEnv,
   options: workspaceOption,
   args: z.object({
-    chainId: z.number().describe("Chain ID (e.g. 1, 8453)"),
+    chainId: z.coerce
+      .number()
+      .int()
+      .positive()
+      .describe("Chain ID (e.g. 1, 8453)"),
   }),
   async run({ env: processEnv, args, options }) {
     const env = await withWorkspace(processEnv, options);
