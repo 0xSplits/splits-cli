@@ -128,6 +128,8 @@ splits transactions sign <transaction-id> --no-submit
 splits transactions sign <transaction-id> --key <address>
 ```
 
+Signer and network change proposals (`accounts update-signers`, `accounts add-networks`) sign the same way and execute on every network at once. On a multisig, the last signer runs `transactions update-gas-estimation <id>` first.
+
 ## Usage
 
 ### Transactions
@@ -141,7 +143,8 @@ splits transactions list --account 0x... --cursor <cursor>
 # Get a specific transaction
 splits transactions get <id>
 
-# Update gas estimates for an existing transaction
+# Update gas estimates for an existing transaction. On a multisig, run it
+# when one signer remains: it rotates the signingHash the last signer signs.
 splits transactions update-gas-estimation <id>
 
 # Sign a pending multisig transaction with the local EOA
@@ -189,9 +192,14 @@ splits transactions create swap --account 0x... --chain-id 8453 \
 splits transactions create swap --account 0x... --chain-id 8453 --destination-chain-id 1 \
   --sell-token 0x4200000000000000000000000000000000000006 \
   --buy-token 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 --amount 0.5
+
+# Propose raw EVM calls (pass the calls as one JSON array)
+splits transactions create custom --account 0x1111111111111111111111111111111111111111 \
+  --chain-id 1 \
+  --calls '[{"to":"0x2222222222222222222222222222222222222222","data":"0x","value":"0"}]'
 ```
 
-The response shows the off-ramp fee and the token amount sent.
+The off-ramp response shows the fee and the token amount sent.
 
 For multisig transactions, gas can only be refreshed when exactly one signer remains. `transactions sign` requires a local EOA (see "Local signing key" above) and that the address is already an authorized signer on the transaction's smart account.
 
@@ -272,6 +280,19 @@ splits accounts rename <address> --name "New Name"
 splits accounts create --name "Operations" --passkeyIds <id1>,<id2> --threshold 1
 splits accounts create --name "Ops"  --eoaSignerIds <eoa-id1>,<eoa-id2>     --threshold 2
 splits accounts create --name "Bots" --eoaAddresses 0xabc...,0xdef...        --threshold 1
+
+# List the networks enabled on the org, and any network addition still pending
+splits accounts networks
+
+# Add networks to every account in the org (requires owner-scoped API key).
+# Returns the proposal to sign, or networksAdded true when no onchain change is needed.
+splits accounts add-networks --chain-ids 10,42161
+
+# Remove networks (requires owner-scoped API key). Refused when the accounts
+# hold tokens there unless the flag is passed; the tokens come back when the
+# network is added again.
+splits accounts remove-networks --chain-ids 42161
+splits accounts remove-networks --chain-ids 42161 --confirm-funds-on-removed-networks
 ```
 
 ### Accounting
@@ -347,6 +368,38 @@ splits members list
 
 # List passkey signers for a member (use for account creation)
 splits members signers <userId>
+```
+
+### Contacts
+
+```sh
+# Search or list contacts, each with its send rules
+splits contacts list
+splits contacts list --q treasury
+
+# Look up several addresses at once
+splits contacts lookup --addresses 0xabc...,0xdef...
+```
+
+A transfer to a contact must match one of its send rules; a contact with no rules accepts any token on any chain. A rule with `tokenAddress: null` allows every token on its chain. Contacts are edited in the Splits app.
+
+### Settings
+
+```sh
+# Get the workspace name, memo requirement, and auto-earn state.
+# autoEarn lists enabledChainIds, eligibleChainIds (off but can be turned on),
+# and pendingTransactionId. Accounts enroll in the background, so one can read
+# as not earning for a while after its chain is enabled. autoEarn is null
+# until the workspace has a Treasury.
+splits settings get
+```
+
+### Feedback
+
+```sh
+# Send feedback to the Splits team (goal, command, response, what you expected).
+# Needs a user-bound API key (read scope is enough); up to 10 per org per hour.
+splits feedback send --text "transactions create swap returned 'Invalid token' for USDC on Base"
 ```
 
 ## MCP Server (Claude Code)
