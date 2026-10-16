@@ -366,6 +366,19 @@ splits members list
 splits members signers <userId>
 ```
 
+### Contacts
+
+```sh
+# Search or list contacts, each with its send rules
+splits contacts list
+splits contacts list --q treasury
+
+# Look up several addresses at once
+splits contacts lookup --addresses 0xabc...,0xdef...
+```
+
+A transfer to a contact must match one of its send rules; a contact with no rules accepts any token on any chain. A rule with `tokenAddress: null` allows every token on its chain. Contacts are edited in the Splits app.
+
 ### Settings
 
 ```sh
