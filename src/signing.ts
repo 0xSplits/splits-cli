@@ -25,20 +25,17 @@ type TxGetResponse = { data: { signingHash?: string | null } };
 // signing attacker-chosen bytes as raw message input.
 const SIGNING_HASH_RE = /^0x[0-9a-f]{64}$/i;
 
-const fetchSigningHash = async (
-  env: Credentials,
-  txId: string,
-): Promise<`0x${string}`> => {
-  const tx = await httpRequest<TxGetResponse>(env, `/transactions/${txId}`, {
-    requireAuth: true,
-  });
-  const hash = tx.data.signingHash;
+const assertSigningHash = ({
+  hash,
+  missingCode,
+  missingMessage,
+}: {
+  hash: unknown;
+  missingCode: string;
+  missingMessage: string;
+}): `0x${string}` => {
   if (hash === null || hash === undefined) {
-    throw new SplitsApiError(
-      "transaction-not-cli-signable",
-      0,
-      "This transaction does not expose a signingHash (e.g. some deploy paths). Sign via the web app.",
-    );
+    throw new SplitsApiError(missingCode, 0, missingMessage);
   }
   if (typeof hash !== "string" || !SIGNING_HASH_RE.test(hash)) {
     throw new SplitsApiError(
@@ -48,6 +45,33 @@ const fetchSigningHash = async (
     );
   }
   return hash as `0x${string}`;
+};
+
+const fetchSigningHash = async (
+  env: Credentials,
+  txId: string,
+): Promise<`0x${string}`> => {
+  const tx = await httpRequest<TxGetResponse>(env, `/transactions/${txId}`, {
+    requireAuth: true,
+  });
+  return assertSigningHash({
+    hash: tx.data.signingHash,
+    missingCode: "transaction-not-cli-signable",
+    missingMessage:
+      "This transaction does not expose a signingHash (e.g. some deploy paths). Sign via the web app.",
+  });
+};
+
+const requireLocalKey = async (keyAddress?: string) => {
+  const localKey = await loadLocalKey(keyAddress);
+  if (localKey === null) {
+    throw new SplitsApiError(
+      "no-local-key",
+      0,
+      "No local signing key. Run `splits auth create-key` or `splits auth import-key` first.",
+    );
+  }
+  return localKey;
 };
 
 export const signHash = (
@@ -61,16 +85,7 @@ export async function signTransactionLocally(
   txId: string,
   opts: { submit: boolean; keyAddress?: string },
 ): Promise<SignResponse> {
-  const localKey = await loadLocalKey(opts.keyAddress);
-  if (localKey === null) {
-    throw new SplitsApiError(
-      "no-local-key",
-      0,
-      "No local signing key. Run `splits auth create-key` or `splits auth import-key` first.",
-    );
-  }
-
-  const { privateKey } = localKey;
+  const { privateKey } = await requireLocalKey(opts.keyAddress);
   const account = privateKeyToAccount(privateKey);
 
   const postSignature = async (
@@ -111,6 +126,88 @@ export async function signTransactionLocally(
         `Local key ${account.address} is not an authorized signer on this transaction. ` +
           `If you just registered this key via update-signers, the registration proposal ` +
           `must be approved and executed before it can sign other transactions.`,
+      );
+    }
+    throw err;
+  }
+}
+
+type MessageResponse = {
+  data: {
+    id: string;
+    accountAddress: string;
+    chainId: number;
+    name: string;
+    dataType: string;
+    data: string;
+    signingHash: string | null;
+    signatureCount: number;
+    threshold: number;
+    signature: string | null;
+    createdAt: string;
+  };
+};
+
+export async function signMessageLocally(
+  env: Credentials,
+  opts: {
+    address: string;
+    messageId?: string;
+    create?: Record<string, unknown>;
+    keyAddress?: string;
+  },
+): Promise<MessageResponse> {
+  const { privateKey } = await requireLocalKey(opts.keyAddress);
+  const account = privateKeyToAccount(privateKey);
+  const messagesPath = `/org/accounts/${opts.address}/messages`;
+
+  const message = opts.messageId
+    ? await httpRequest<MessageResponse>(
+        env,
+        `${messagesPath}/${opts.messageId}`,
+        { requireAuth: true },
+      )
+    : await httpRequest<MessageResponse>(env, messagesPath, {
+        method: "POST",
+        requireAuth: true,
+        body: opts.create,
+      });
+
+  if (message.data.signature !== null) return message;
+
+  const signingHash = assertSigningHash({
+    hash: message.data.signingHash,
+    missingCode: "message-not-cli-signable",
+    missingMessage: `Message ${message.data.id} does not expose a signingHash. Sign via the web app.`,
+  });
+
+  try {
+    return await httpRequest<MessageResponse>(
+      env,
+      `${messagesPath}/${message.data.id}/sign`,
+      {
+        method: "PUT",
+        requireAuth: true,
+        body: {
+          eoaSigner: account.address,
+          signature: await signHash(privateKey, signingHash),
+        },
+      },
+    );
+  } catch (err) {
+    if (err instanceof SplitsApiError && err.splitsCode === "UNIQUE_SIGNER") {
+      return httpRequest<MessageResponse>(
+        env,
+        `${messagesPath}/${message.data.id}`,
+        { requireAuth: true },
+      );
+    }
+    if (err instanceof SplitsApiError && err.splitsCode === "INVALID_SIGNER") {
+      throw new SplitsApiError(
+        "signer-not-authorized",
+        err.status,
+        `Local key ${account.address} is not a signer of account ${opts.address}. ` +
+          `Another signer can sign message ${message.data.id} with --id.`,
       );
     }
     throw err;
