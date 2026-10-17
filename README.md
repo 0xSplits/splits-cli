@@ -167,6 +167,18 @@ splits transactions create earn-withdraw --account 0x... --chain-id 8453 \
   --asset 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 --amount 25 \
   --pause-auto-earn-seconds 3600
 
+# Pay a recipient 25 USDC from Earn on Base in one proposal.
+# Find the Earn row for this account and chain. Use earn.assetAddress as
+# --token and earn.vaultAddress as --source-token.
+splits accounts balances 0x... --chain-ids 8453 --format json
+splits transactions create transfer --account 0x... --chain-id 8453 \
+  --recipient 0x... --token 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 \
+  --amount 25 --source-token <earn-vault-address-from-balances>
+
+# Turn workspace auto-earn on or off (one Treasury proposal for every network)
+splits transactions create auto-earn-on
+splits transactions create auto-earn-off --memo "Pause yield for the audit"
+
 # Off-ramp to a bank account (amount is the fiat the bank receives; the fee is added on top)
 splits offramp external-accounts
 splits transactions create offramp --account 0x... \
@@ -196,6 +208,8 @@ splits transactions create custom --account 0x1111111111111111111111111111111111
 ```
 
 The off-ramp response shows the fee and the token amount sent.
+
+For an Earn-funded transfer, `--amount` is the amount of the underlying token the recipient receives, not the number of vault shares spent. The proposal withdraws the required shares and pays the recipient; approve its `signUrl` or sign it with an authorized local EOA. Use `earn-withdraw` when you want the underlying token to remain in the smart account instead.
 
 For multisig transactions, gas can only be refreshed when exactly one signer remains. `transactions sign` requires a local EOA (see "Local signing key" above) and that the address is already an authorized signer on the transaction's smart account.
 
@@ -255,7 +269,7 @@ splits accounts get <address>
 # Get token balances. Earn vault rows carry an `earn` object with the
 # underlying asset and the amount the shares redeem for. The address is
 # auto-selected if the org has one account.
-splits accounts balances [address] --chainIds 8453,1
+splits accounts balances [address] --chain-ids 8453,1
 
 # List signers (passkeys + EOAs) and threshold for a subaccount
 splits accounts signers <address>
@@ -374,6 +388,30 @@ splits members list
 # List passkey signers for a member (use for account creation)
 splits members signers <userId>
 ```
+
+### Invoices
+
+```sh
+# List unpaid invoices
+splits invoices list --statuses unpaid
+
+# Get one invoice, with the url where the payer pays it
+splits invoices get <invoiceId>
+
+# Create an invoice for 1,500 USDC on Base and email it to the payer
+splits invoices create --payee-name "Acme Studio" --payer-name "Globex" \
+  --payer-email billing@globex.com --amount 1500 --chain-id 8453 \
+  --token-address 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 \
+  --due-date 2026-11-01T00:00:00Z
+
+# Bill monthly: each invoice is emailed 14 days before it is due
+splits invoices create --payee-name "Acme Studio" --payer-name "Globex" \
+  --payer-email billing@globex.com --amount 1500 --chain-id 8453 \
+  --token-address 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 \
+  --due-date 2026-11-01T00:00:00Z --interval MONTHLY --due-date-days 14
+```
+
+Creating an invoice emails the payer right away, so check the email before you run it. It needs an owner-scoped key for an org owner and a workspace on the Pro plan or higher, and each workspace can create up to 50 invoices per hour.
 
 ### Contacts
 

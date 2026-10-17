@@ -3039,6 +3039,53 @@ create.command("earn-withdraw", {
   },
 });
 
+const autoEarnProposalOptions = workspaceOption.extend({
+  memo: z
+    .string()
+    .max(500)
+    .optional()
+    .describe("Optional memo for the transaction (max 500 chars)"),
+});
+
+const createAutoEarnProposal = async ({
+  env,
+  enabled,
+  options,
+}: {
+  env: Awaited<ReturnType<typeof withWorkspace>>;
+  enabled: boolean;
+  options: z.infer<typeof autoEarnProposalOptions>;
+}) =>
+  apiRequest<{ data?: unknown }>(env, "/proposals/auto_earn", {
+    method: "POST",
+    body: {
+      enabled,
+      ...(options.memo !== undefined && { memo: options.memo }),
+    },
+  });
+
+create.command("auto-earn-on", {
+  description:
+    "Create a proposal, for a human signer to approve, that turns auto-earn on for the whole workspace from the Treasury. It covers every network that qualifies now (autoEarn.eligibleChainIds in `settings get`); a background job then enrolls the Treasury and its operating accounts. Requires an org owner or a Treasury signer, and fails while another auto-earn proposal is pending. Returns the proposal with the chainIds it covers and a signUrl.",
+  env: authEnv,
+  options: autoEarnProposalOptions,
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
+    return createAutoEarnProposal({ env, enabled: true, options });
+  },
+});
+
+create.command("auto-earn-off", {
+  description:
+    "Create a proposal, for a human signer to approve, that turns auto-earn off for the whole workspace from the Treasury. It covers every network where auto-earn is on (autoEarn.enabledChainIds in `settings get`) and stops auto-earn on every account that has it. Requires an org owner or a Treasury signer, and fails while another auto-earn proposal is pending. Returns the proposal with the chainIds it covers and a signUrl.",
+  env: authEnv,
+  options: autoEarnProposalOptions,
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
+    return createAutoEarnProposal({ env, enabled: false, options });
+  },
+});
+
 create.command("offramp", {
   description:
     "Create a proposal that off-ramps USDC or EURC to one of the org's bank accounts through Bridge. Pick the bank with `offramp external-accounts`; it sets the chain, token, and recipient. Specify amount as the fiat the bank receives (minimum 10); the proposal sends that plus the off-ramp fee, and returns both the fee and the token amount sent. If the account holds the token in Earn or holds another token, pass --source-token to pay with it in the same proposal. Requires an owner-scoped API key for an org owner. Returns the proposal with the fee, the token amount sent, and a signUrl.",
@@ -3638,6 +3685,161 @@ automations.command("list", {
 });
 
 cli.command(automations);
+
+// =============================================================================
+// invoices
+// ======================================================================
+const invoices = Cli.create("invoices", {
+  description: "Invoices billed by the org",
+});
+
+invoices.command("list", {
+  description:
+    "List the org's invoices, newest first. Each invoice has a url where the payer views and pays it.",
+  env: authEnv,
+  options: workspaceOption.extend({
+    statuses: z
+      .string()
+      .optional()
+      .describe(
+        "Comma-separated statuses to include: paid, unpaid, void. Omit to return every invoice except void ones.",
+      ),
+  }),
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
+    return apiRequest(
+      env,
+      `/invoices${buildQuery({ statuses: options.statuses })}`,
+    );
+  },
+});
+
+invoices.command("get", {
+  description: "Get an invoice by id",
+  env: authEnv,
+  args: z.object({
+    id: z.string().uuid().describe("Invoice ID"),
+  }),
+  options: workspaceOption,
+  async run({ env: processEnv, args, options }) {
+    const env = await withWorkspace(processEnv, options);
+    return apiRequest(env, `/invoices/${args.id}`);
+  },
+});
+
+invoices.command("create", {
+  description:
+    "Create an invoice and email it to --payer-email right away. Without --payer-email, no email is sent. With --interval and --due-date-days, it also creates a schedule that emails a new invoice before each due date; when the first issue date is still in the future or the first due date has passed, only the schedule is created and the next daily run picks it up. Requires an owner-scoped key for an org owner and the Pro plan.",
+  env: authEnv,
+  options: workspaceOption.extend({
+    accountAddress: evmAddress
+      .optional()
+      .describe(
+        "Account that receives the payment. Auto-selected if the org has one account.",
+      ),
+    payeeName: z.string().min(1).describe("Name of who is billing"),
+    payerName: z.string().min(1).describe("Name of who pays"),
+    payerEmail: z
+      .string()
+      .email()
+      .optional()
+      .describe("Email the invoice is sent to"),
+    ccEmails: z
+      .string()
+      .optional()
+      .describe(
+        "Comma-separated emails that get a copy (max 10). Requires --payer-email.",
+      ),
+    amount: z
+      .string()
+      .regex(/^\d+(\.\d+)?$/, "Amount must be a positive decimal")
+      .describe("Amount in token units (e.g. 1500.00)"),
+    chainId: z.number().int().positive().describe("Chain the payer pays on"),
+    tokenAddress: evmAddress.describe("Token the payer pays in"),
+    dueDate: z
+      .string()
+      .datetime()
+      .describe(
+        "Due date, ISO 8601 (e.g. 2026-11-01T00:00:00Z). With a schedule, the first due date. Dates count as UTC calendar days.",
+      ),
+    memo: z.string().optional().describe("Memo shown on the invoice"),
+    allowFiatPayments: z
+      .boolean()
+      .optional()
+      .describe("Let the payer pay by bank transfer. Defaults to true."),
+    interval: z
+      .enum(["WEEKLY", "MONTHLY", "YEARLY", "ONCE"])
+      .optional()
+      .describe(
+        "Repeat the invoice on each due date. ONCE sends a single invoice on its issue date. Requires --due-date-days.",
+      ),
+    dueDateDays: z
+      .number()
+      .int()
+      .nonnegative()
+      .optional()
+      .describe(
+        "Days between each issue date and its due date. Requires --interval.",
+      ),
+  }),
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
+
+    if (
+      (options.interval === undefined) !==
+      (options.dueDateDays === undefined)
+    ) {
+      throw new Error("Pass --interval and --due-date-days together.");
+    }
+
+    let accountAddress = options.accountAddress;
+    if (!accountAddress) {
+      const result = await apiRequest<{
+        data: Array<{ address: string }>;
+      }>(env, "/org/accounts");
+      if (result.data.length !== 1) {
+        throw new Error(
+          `Specify --account-address: ${result.data.map((a) => a.address).join(", ")}`,
+        );
+      }
+      accountAddress = result.data[0].address;
+    }
+
+    return apiRequest(env, "/invoices", {
+      method: "POST",
+      body: {
+        accountAddress,
+        payeeName: options.payeeName,
+        payerName: options.payerName,
+        ...(options.payerEmail !== undefined && {
+          payerEmail: options.payerEmail,
+        }),
+        ...(options.ccEmails !== undefined && {
+          ccEmails: options.ccEmails
+            .split(",")
+            .map((email) => email.trim())
+            .filter(Boolean),
+        }),
+        amount: options.amount,
+        chainId: options.chainId,
+        tokenAddress: options.tokenAddress,
+        dueDate: options.dueDate,
+        ...(options.memo !== undefined && { memo: options.memo }),
+        ...(options.allowFiatPayments !== undefined && {
+          allowFiatPayments: options.allowFiatPayments,
+        }),
+        ...(options.interval !== undefined && {
+          schedule: {
+            interval: options.interval,
+            dueDateDays: options.dueDateDays,
+          },
+        }),
+      },
+    });
+  },
+});
+
+cli.command(invoices);
 
 // =============================================================================
 // feedback
