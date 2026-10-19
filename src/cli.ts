@@ -1353,10 +1353,7 @@ accounts.command("update-signers", {
     "Primary use case: adding an external (EOA) key so an agent or automation can operate on the account headlessly " +
     "— passkeys require a biometric 2nd factor that agents cannot provide. " +
     "A workspace owner can propose any change. An agent member (`auth whoami` shows `user.kind: AGENT`) can only " +
-    "propose adding its own EOA signers, with no passkey or removal, and may raise but not lower the threshold; an owner signs it. " +
-    "When an agent adds its own key to an account that already has a human signer, propose the threshold one higher " +
-    "(--threshold <current + 1>) unless the person asked otherwise: at the current threshold the agent's key alone may meet it " +
-    "and move funds. Tell the person which you chose and why. " +
+    "propose adding its own EOA signers, with no passkey, removal or threshold change, and an owner signs it. " +
     "The proposal is created immediately. Sign it on the web via the returned signUrl, or with " +
     "'transactions sign <id>' from a local key that is already a signer on the account. " +
     "On a multisig, run 'transactions update-gas-estimation <id>' before the last signature. " +
