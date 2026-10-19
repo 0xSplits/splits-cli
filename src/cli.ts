@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { Cli, z } from "incur";
+import { toHex } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 
 import {
@@ -40,7 +41,7 @@ import {
 import { downloadToFile, httpRequest, SplitsApiError } from "./http.js";
 import { PERIODS, resolvePeriod, type Period } from "./periods.js";
 import { bytes32Hash, evmAddress, transactionId } from "./schemas.js";
-import { signTransactionLocally } from "./signing.js";
+import { signMessageLocally, signTransactionLocally } from "./signing.js";
 
 const AMOUNT_REGEX = /^(0|[1-9]\d*)(\.\d+)?$/;
 
@@ -1332,6 +1333,125 @@ accounts.command("create", {
         eoaSignerIds,
         eoaSigners,
         threshold: options.threshold,
+      },
+    });
+  },
+});
+
+const typedDataOptionSchema = z.union([
+  z.record(z.string(), z.unknown()),
+  z.string(),
+]);
+
+const parseTypedData = (
+  value: z.infer<typeof typedDataOptionSchema>,
+): Record<string, unknown> => {
+  if (typeof value !== "string") return value;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error("--typed-data must be valid JSON.");
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("--typed-data must be a JSON object.");
+  }
+  return parsed as Record<string, unknown>;
+};
+
+accounts.command("sign-message", {
+  description:
+    "Sign a message as the smart account (ERC-1271) with a local EOA saved by " +
+    "`splits auth create-key` or `splits auth import-key`, the way the web app signs " +
+    "WalletConnect and Splits Connect requests. Pass exactly one of --message (plain text, " +
+    "personal_sign), --hex (raw bytes, personal_sign) or --typed-data (EIP-712 JSON), plus " +
+    "--chain-id. Creates the message, signs its signingHash, and returns the smart account " +
+    "signature once signatureCount reaches threshold. On a multisig the result has " +
+    "signature null; other signers add theirs with --id.",
+  env: authEnv,
+  args: z.object({
+    address: evmAddress.describe(
+      "Account address (0x...) that signs the message",
+    ),
+  }),
+  options: workspaceOption.extend({
+    chainId: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe(
+        "Chain id the signature is valid on. Required unless --id is set.",
+      ),
+    message: z
+      .string()
+      .min(1)
+      .optional()
+      .describe("Plain text to sign with personal_sign"),
+    hex: z
+      .string()
+      .regex(/^0x([a-fA-F0-9]{2})*$/)
+      .optional()
+      .describe("0x-prefixed bytes to sign with personal_sign"),
+    typedData: typedDataOptionSchema
+      .optional()
+      .describe(
+        "EIP-712 typed data as JSON (domain, types, primaryType, message)",
+      ),
+    name: z
+      .string()
+      .trim()
+      .min(1)
+      .max(255)
+      .optional()
+      .describe("Label shown in the web app"),
+    id: z
+      .string()
+      .uuid()
+      .optional()
+      .describe("Sign an existing message instead of creating one"),
+    key: evmAddress
+      .optional()
+      .describe(
+        "Address of the local key to sign with. Required when several local keys are saved.",
+      ),
+  }),
+  async run({ env: processEnv, args, options }) {
+    const env = await withWorkspace(processEnv, options);
+    if (options.id) {
+      return signMessageLocally(env, {
+        address: args.address,
+        messageId: options.id,
+        keyAddress: options.key,
+      });
+    }
+
+    const payloads = [options.message, options.hex, options.typedData].filter(
+      (value) => value !== undefined,
+    );
+    if (payloads.length !== 1) {
+      throw new Error("Pass exactly one of --message, --hex or --typed-data.");
+    }
+    if (options.chainId === undefined) {
+      throw new Error("--chain-id is required when creating a message.");
+    }
+
+    return signMessageLocally(env, {
+      address: args.address,
+      keyAddress: options.key,
+      create: {
+        chainId: options.chainId,
+        name: options.name,
+        ...(options.typedData !== undefined
+          ? {
+              dataType: "ETH_SIGNTYPEDDATA_V4",
+              data: parseTypedData(options.typedData),
+            }
+          : {
+              dataType: "PERSONAL_SIGN",
+              data: options.hex ?? toHex(options.message ?? ""),
+            }),
       },
     });
   },

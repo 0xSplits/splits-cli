@@ -283,6 +283,15 @@ splits accounts unarchive <address>
 # Rename a subaccount (requires owner-scoped API key)
 splits accounts rename <address> --name "New Name"
 
+# Sign a message as the account (ERC-1271) with your local key, as the web app
+# does for WalletConnect requests. The result carries `signature` once
+# signatureCount reaches threshold; on a multisig, other signers add theirs
+# with --id.
+splits accounts sign-message <address> --chainId 8453 --message "Hello"
+splits accounts sign-message <address> --chainId 8453 --hex 0x68656c6c6f
+splits accounts sign-message <address> --chainId 8453 --typedData '{"domain":{...},"types":{...},"primaryType":"Mail","message":{...}}'
+splits accounts sign-message <address> --id <message-id>
+
 # Create a subaccount (requires owner-scoped API key)
 # EOAs must be registered first via `splits auth register-signer <address>`.
 # Prefer ids when you have them; addresses are accepted as a convenience and
