@@ -270,8 +270,8 @@ const auth = Cli.create("auth", {
 
 auth.command("whoami", {
   description:
-    "Show current org, API key name, and scopes, and the user the key acts as " +
-    "(`user.kind` is AGENT when the key belongs to an agent member of the workspace, null for an org-level key). " +
+    "Show the current org, the API key name and scopes, and the user the key acts as. " +
+    "`user.kind` is AGENT when the key belongs to an agent, and `user` is null for an org-level key. " +
     "Also reports the workspace the credentials came from (null when SPLITS_API_KEY is set), " +
     "whether they came from the environment or the local keystore, and the local EOA signing " +
     "keys saved by `splits auth create-key` or `import-key`. For each local key registered " +
