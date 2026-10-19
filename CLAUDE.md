@@ -33,7 +33,7 @@ There are no lint or typecheck scripts — `pnpm build` (tsc in strict mode) is 
 
 The entire CLI lives in a single file: `src/cli.ts`. This is intentional — do not split it into per-command files unless it becomes unmanageable. The published binary points at `dist/cli.js`; do not edit `dist/` manually, rebuild instead.
 
-- **Framework**: `incur` provides the `Cli.create` / `command` / `z` (Zod) API. Each top-level namespace (`accounts`, `transactions`, `contacts`, `tokens`, `chains`, `members`, `settings`, `automations`, `auth`) is its own `Cli.create(...)` sub-CLI, registered onto the root via `cli.command(sub)`.
+- **Framework**: `incur` provides the `Cli.create` / `command` / `z` (Zod) API. Each top-level namespace (`accounts`, `transactions`, `contacts`, `tokens`, `chains`, `members`, `settings`, `automations`, `feedback`, `invoices`, `auth`) is its own `Cli.create(...)` sub-CLI, registered onto the root via `cli.command(sub)`.
 - **MCP server**: `cli.serve()` at the bottom of the file both runs the CLI and exposes the same commands as MCP tools when invoked with `--mcp`. Adding a new command automatically makes it available as an MCP tool — there is no separate MCP registration step.
 - **Auth**: every authenticated command declares `env: authEnv` (`SPLITS_API_KEY`, `SPLITS_API_URL`, `SPLITS_WORKSPACE`) and `options: workspaceOption` (or `workspaceOption.extend({...})`), and starts its `run` with `const env = await withWorkspace(processEnv, options)`, which resolves the API key and URL once for the whole command. incur has no global flags, so this is how `--workspace` reaches every command and every MCP tool. Credentials resolve in `resolveCredentials` (`src/config.ts`): `SPLITS_API_KEY` → `--workspace` → `SPLITS_WORKSPACE` → active workspace in `~/.splits/config.json`. An env key never mixes with a workspace: it goes to `SPLITS_API_URL` or production, and naming a workspace next to it is an error. Reuse these instead of introducing command-specific auth handling.
 - **API calls**: all requests go through the `apiRequest(env, path, options?)` helper, which hits `${SPLITS_API_URL}/public/v1${path}` with a `Bearer` token and unwraps `{ error: { message } }` responses into thrown `Error`s. Never call `fetch` directly from a command.
@@ -44,7 +44,7 @@ The entire CLI lives in a single file: `src/cli.ts`. This is intentional — do 
 ## Command design conventions
 
 - Prefer clear, predictable command names over rigid grammatical patterns. Optimize for both agent use and human scanability.
-- Keep top-level groups aligned with backend resources: `accounts`, `transactions`, `contacts`, `tokens`, `chains`, `members`, `settings`, `automations`.
+- Keep top-level groups aligned with backend resources: `accounts`, `transactions`, `contacts`, `tokens`, `chains`, `members`, `settings`, `automations`, `feedback`, `invoices`.
 - Use positional `args` for the primary identifier of single-resource commands; reserve `options` for filters, toggles, and mutation payloads.
 - Keep option names aligned with backend query/body field names to reduce translation overhead.
 - When a backend route has an important eligibility constraint (e.g. `transactions update-gas-estimation` only works with one signer remaining), include it in the command description and README example.

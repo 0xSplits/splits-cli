@@ -128,6 +128,8 @@ splits transactions sign <transaction-id> --no-submit
 splits transactions sign <transaction-id> --key <address>
 ```
 
+Signer and network change proposals (`accounts update-signers`, `accounts add-networks`) sign the same way and execute on every network at once. On a multisig, the last signer runs `transactions update-gas-estimation <id>` first.
+
 ## Usage
 
 ### Transactions
@@ -141,7 +143,8 @@ splits transactions list --account 0x... --cursor <cursor>
 # Get a specific transaction
 splits transactions get <id>
 
-# Update gas estimates for an existing transaction
+# Update gas estimates for an existing transaction. On a multisig, run it
+# when one signer remains: it rotates the signingHash the last signer signs.
 splits transactions update-gas-estimation <id>
 
 # Sign a pending multisig transaction with the local EOA
@@ -164,6 +167,18 @@ splits transactions create earn-withdraw --account 0x... --chain-id 8453 \
   --asset 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 --amount 25 \
   --pause-auto-earn-seconds 3600
 
+# Pay a recipient 25 USDC from Earn on Base in one proposal.
+# Find the Earn row for this account and chain. Use earn.assetAddress as
+# --token and earn.vaultAddress as --source-token.
+splits accounts balances 0x... --chain-ids 8453 --format json
+splits transactions create transfer --account 0x... --chain-id 8453 \
+  --recipient 0x... --token 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 \
+  --amount 25 --source-token <earn-vault-address-from-balances>
+
+# Turn workspace auto-earn on or off (one Treasury proposal for every network)
+splits transactions create auto-earn-on
+splits transactions create auto-earn-off --memo "Pause yield for the audit"
+
 # Off-ramp to a bank account (amount is the fiat the bank receives; the fee is added on top)
 splits offramp external-accounts
 splits transactions create offramp --account 0x... \
@@ -185,9 +200,16 @@ splits transactions create swap --account 0x... --chain-id 8453 \
 splits transactions create swap --account 0x... --chain-id 8453 --destination-chain-id 1 \
   --sell-token 0x4200000000000000000000000000000000000006 \
   --buy-token 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 --amount 0.5
+
+# Propose raw EVM calls (pass the calls as one JSON array)
+splits transactions create custom --account 0x1111111111111111111111111111111111111111 \
+  --chain-id 1 \
+  --calls '[{"to":"0x2222222222222222222222222222222222222222","data":"0x","value":"0"}]'
 ```
 
-The response shows the off-ramp fee and the token amount sent.
+The off-ramp response shows the fee and the token amount sent.
+
+For an Earn-funded transfer, `--amount` is the amount of the underlying token the recipient receives, not the number of vault shares spent. The proposal withdraws the required shares and pays the recipient; approve its `signUrl` or sign it with an authorized local EOA. Use `earn-withdraw` when you want the underlying token to remain in the smart account instead.
 
 For multisig transactions, gas can only be refreshed when exactly one signer remains. `transactions sign` requires a local EOA (see "Local signing key" above) and that the address is already an authorized signer on the transaction's smart account.
 
@@ -247,7 +269,7 @@ splits accounts get <address>
 # Get token balances. Earn vault rows carry an `earn` object with the
 # underlying asset and the amount the shares redeem for. The address is
 # auto-selected if the org has one account.
-splits accounts balances [address] --chainIds 8453,1
+splits accounts balances [address] --chain-ids 8453,1
 
 # List signers (passkeys + EOAs) and threshold for a subaccount
 splits accounts signers <address>
@@ -268,6 +290,19 @@ splits accounts rename <address> --name "New Name"
 splits accounts create --name "Operations" --passkeyIds <id1>,<id2> --threshold 1
 splits accounts create --name "Ops"  --eoaSignerIds <eoa-id1>,<eoa-id2>     --threshold 2
 splits accounts create --name "Bots" --eoaAddresses 0xabc...,0xdef...        --threshold 1
+
+# List the networks enabled on the org, and any network addition still pending
+splits accounts networks
+
+# Add networks to every account in the org (requires owner-scoped API key).
+# Returns the proposal to sign, or networksAdded true when no onchain change is needed.
+splits accounts add-networks --chain-ids 10,42161
+
+# Remove networks (requires owner-scoped API key). Refused when the accounts
+# hold tokens there unless the flag is passed; the tokens come back when the
+# network is added again.
+splits accounts remove-networks --chain-ids 42161
+splits accounts remove-networks --chain-ids 42161 --confirm-funds-on-removed-networks
 ```
 
 ### Accounting
@@ -361,6 +396,62 @@ splits automations create --name "To USDC on Base" \
 ```
 
 Creating an automation needs an owner-scoped key. The new account distributes every balance it receives without a signature, so check the destination addresses before you share it. Editing an automation stays in the web app, behind a passkey.
+
+### Invoices
+
+```sh
+# List unpaid invoices
+splits invoices list --statuses unpaid
+
+# Get one invoice, with the url where the payer pays it
+splits invoices get <invoiceId>
+
+# Create an invoice for 1,500 USDC on Base and email it to the payer
+splits invoices create --payee-name "Acme Studio" --payer-name "Globex" \
+  --payer-email billing@globex.com --amount 1500 --chain-id 8453 \
+  --token-address 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 \
+  --due-date 2026-11-01T00:00:00Z
+
+# Bill monthly: each invoice is emailed 14 days before it is due
+splits invoices create --payee-name "Acme Studio" --payer-name "Globex" \
+  --payer-email billing@globex.com --amount 1500 --chain-id 8453 \
+  --token-address 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 \
+  --due-date 2026-11-01T00:00:00Z --interval MONTHLY --due-date-days 14
+```
+
+Creating an invoice emails the payer right away, so check the email before you run it. It needs an owner-scoped key for an org owner and a workspace on the Pro plan or higher, and each workspace can create up to 50 invoices per hour.
+
+### Contacts
+
+```sh
+# Search or list contacts, each with its send rules
+splits contacts list
+splits contacts list --q treasury
+
+# Look up several addresses at once
+splits contacts lookup --addresses 0xabc...,0xdef...
+```
+
+A transfer to a contact must match one of its send rules; a contact with no rules accepts any token on any chain. A rule with `tokenAddress: null` allows every token on its chain. Contacts are edited in the Splits app.
+
+### Settings
+
+```sh
+# Get the workspace name, memo requirement, and auto-earn state.
+# autoEarn lists enabledChainIds, eligibleChainIds (off but can be turned on),
+# and pendingTransactionId. Accounts enroll in the background, so one can read
+# as not earning for a while after its chain is enabled. autoEarn is null
+# until the workspace has a Treasury.
+splits settings get
+```
+
+### Feedback
+
+```sh
+# Send feedback to the Splits team (goal, command, response, what you expected).
+# Needs a user-bound API key (read scope is enough); up to 10 per org per hour.
+splits feedback send --text "transactions create swap returned 'Invalid token' for USDC on Base"
+```
 
 ## MCP Server (Claude Code)
 

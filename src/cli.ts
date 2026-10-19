@@ -1197,7 +1197,9 @@ accounts.command("balances", {
 });
 
 accounts.command("chains", {
-  description: "List chains an account is deployed/synced on",
+  description:
+    "List every chain Splits supports, with whether this account's signers are in sync on each. " +
+    "For the networks enabled on the org, use 'accounts networks'.",
   env: authEnv,
   options: workspaceOption,
   args: z.object({
@@ -1342,12 +1344,13 @@ accounts.command("update-signers", {
     "its id here. The same id can be attached to any number of accounts. " +
     "Primary use case: adding an external (EOA) key so an agent or automation can operate on the account headlessly " +
     "— passkeys require a biometric 2nd factor that agents cannot provide. " +
-    "The proposal is created immediately; it must be approved and signed on the web via the returned signUrl. " +
-    "(The web-approval step is platform policy, not onchain enforcement — size thresholds assuming any " +
-    "threshold-meeting signer set can change signers.) " +
+    "The proposal is created immediately. Sign it on the web via the returned signUrl, or with " +
+    "'transactions sign <id>' from a local key that is already a signer on the account. " +
+    "On a multisig, run 'transactions update-gas-estimation <id>' before the last signature. " +
+    "Size thresholds assuming any threshold-meeting signer set, agent keys included, can change signers. " +
     "Poll 'transactions get <id>' to watch status transition from CREATED to EXECUTED. " +
-    "If this returns 409 SMART_ACCOUNT_STATE_CHANGE_IN_PROGRESS, call 'transactions list --account <address>' " +
-    "to find the pending proposal; it must be signed (web) or cancelled before retrying. " +
+    "If this returns 400 SMART_ACCOUNT_MERKLE_TRANSACTION_IN_PROGRESS, call 'transactions list --account <address>' " +
+    "to find the pending proposal; it must be signed or cancelled before retrying. " +
     "Recovery / resetting signers stays web-only — no CLI or API route exists. " +
     "(Recovery is the owning account's contract-enforced right — see 'splits accounts'; the root account " +
     "has no owner and cannot be recovered from above.) " +
@@ -1419,6 +1422,86 @@ accounts.command("update-signers", {
       "/proposals/update_signers",
       { method: "POST", body },
     );
+  },
+});
+
+accounts.command("networks", {
+  description:
+    "List the networks enabled on the org, which every account operates on. " +
+    "Also returns the add-networks proposal still pending, if any, with the chains it adds and its signUrl. " +
+    "Those chains join the list once the proposal executes.",
+  env: authEnv,
+  options: workspaceOption,
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
+    return apiRequest(env, "/org/networks");
+  },
+});
+
+accounts.command("add-networks", {
+  description:
+    "Add networks to every account in the org. Networks already on the org are kept. " +
+    "When an account needs an onchain change on a new network (a deployment or a signer sync), " +
+    "this creates one proposal that covers every network: it returns networksAdded false and the proposal. " +
+    "The proposal sits on the Treasury account, or on the Root account when the Treasury itself needs an update; " +
+    "check 'accounts signers <address>' on that account before signing. " +
+    "Sign it on the web via the returned signUrl, or with 'transactions sign <id>' from a local key that is a signer on that account. " +
+    "On a multisig, run 'transactions update-gas-estimation <id>' before the last signature. " +
+    "When no onchain change is needed, the networks are added right away and networksAdded is true. " +
+    "Use 'accounts networks' for the networks already enabled and 'chains list' for the supported ones. " +
+    "Returns 400 SMART_ACCOUNT_MERKLE_TRANSACTION_IN_PROGRESS while another signer or network change is pending. " +
+    "Requires owner-scoped API key.",
+  env: authEnv,
+  options: workspaceOption.extend({
+    chainIds: z
+      .string()
+      .describe("Comma-separated chain ids to add (e.g. '10,42161')"),
+    memo: z.string().optional().describe("Optional memo (max 500 chars)"),
+  }),
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
+    const body = {
+      chainIds: parseChainIds(options.chainIds),
+      ...(options.memo !== undefined && { memo: options.memo }),
+    };
+    return apiRequest(env, "/proposals/add_networks", {
+      method: "POST",
+      body,
+    });
+  },
+});
+
+accounts.command("remove-networks", {
+  description:
+    "Remove networks from every account in the org. Takes effect right away and needs no signature; nothing happens onchain. " +
+    "When the org's accounts hold tokens on a removed network, it is refused unless --confirm-funds-on-removed-networks is passed. " +
+    "Those tokens stay at the same addresses but are inaccessible in Splits until the network is added again with 'accounts add-networks'. " +
+    "Use 'accounts networks' for the networks enabled now. " +
+    "Returns 400 SMART_ACCOUNT_MERKLE_TRANSACTION_IN_PROGRESS while a signer or network change is pending. " +
+    "Requires owner-scoped API key.",
+  env: authEnv,
+  options: workspaceOption.extend({
+    chainIds: z
+      .string()
+      .describe("Comma-separated chain ids to remove (e.g. '10,42161')"),
+    confirmFundsOnRemovedNetworks: z
+      .boolean()
+      .default(false)
+      .describe(
+        "Remove networks even where the org's accounts hold tokens. Confirm with the user first.",
+      ),
+  }),
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
+    return apiRequest(env, "/org/networks/remove", {
+      method: "POST",
+      body: {
+        chainIds: parseChainIds(options.chainIds),
+        ...(options.confirmFundsOnRemovedNetworks && {
+          confirmFundsOnRemovedNetworks: true,
+        }),
+      },
+    });
   },
 });
 
@@ -2574,7 +2657,9 @@ transactions.command(properties);
 
 transactions.command("update-gas-estimation", {
   description:
-    "Update gas estimates for an existing transaction. For multisig, run this when one signer remains.",
+    "Update gas estimates for an existing transaction. For multisig, run this when one signer remains: " +
+    "it rotates the signingHash to the one the last signer must sign, including on a signer or network change proposal. " +
+    "The response's gasEstimates is null for those proposals, whose gas is estimated per network.",
   env: authEnv,
   options: workspaceOption,
   args: z.object({
@@ -2834,6 +2919,53 @@ create.command("earn-withdraw", {
   },
 });
 
+const autoEarnProposalOptions = workspaceOption.extend({
+  memo: z
+    .string()
+    .max(500)
+    .optional()
+    .describe("Optional memo for the transaction (max 500 chars)"),
+});
+
+const createAutoEarnProposal = async ({
+  env,
+  enabled,
+  options,
+}: {
+  env: Awaited<ReturnType<typeof withWorkspace>>;
+  enabled: boolean;
+  options: z.infer<typeof autoEarnProposalOptions>;
+}) =>
+  apiRequest<{ data?: unknown }>(env, "/proposals/auto_earn", {
+    method: "POST",
+    body: {
+      enabled,
+      ...(options.memo !== undefined && { memo: options.memo }),
+    },
+  });
+
+create.command("auto-earn-on", {
+  description:
+    "Create a proposal, for a human signer to approve, that turns auto-earn on for the whole workspace from the Treasury. It covers every network that qualifies now (autoEarn.eligibleChainIds in `settings get`); a background job then enrolls the Treasury and its operating accounts. Requires an org owner or a Treasury signer, and fails while another auto-earn proposal is pending. Returns the proposal with the chainIds it covers and a signUrl.",
+  env: authEnv,
+  options: autoEarnProposalOptions,
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
+    return createAutoEarnProposal({ env, enabled: true, options });
+  },
+});
+
+create.command("auto-earn-off", {
+  description:
+    "Create a proposal, for a human signer to approve, that turns auto-earn off for the whole workspace from the Treasury. It covers every network where auto-earn is on (autoEarn.enabledChainIds in `settings get`) and stops auto-earn on every account that has it. Requires an org owner or a Treasury signer, and fails while another auto-earn proposal is pending. Returns the proposal with the chainIds it covers and a signUrl.",
+  env: authEnv,
+  options: autoEarnProposalOptions,
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
+    return createAutoEarnProposal({ env, enabled: false, options });
+  },
+});
+
 create.command("offramp", {
   description:
     "Create a proposal that off-ramps USDC or EURC to one of the org's bank accounts through Bridge. Pick the bank with `offramp external-accounts`; it sets the chain, token, and recipient. Specify amount as the fiat the bank receives (minimum 10); the proposal sends that plus the off-ramp fee, and returns both the fee and the token amount sent. If the account holds the token in Earn or holds another token, pass --source-token to pay with it in the same proposal. Requires an owner-scoped API key for an org owner. Returns the proposal with the fee, the token amount sent, and a signUrl.",
@@ -3041,28 +3173,41 @@ create.command("custom", {
       .describe(
         "The chain ID where the smart account is deployed (e.g., 1 for Ethereum, 8453 for Base)",
       ),
-    calls: z
-      .array(
-        z.object({
-          to: z
-            .string()
-            .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid address")
-            .describe("Target contract address (0x-prefixed, 40 hex chars)"),
-          data: z
-            .string()
-            .regex(/^0x[a-fA-F0-9]*$/, "Invalid hex calldata")
-            .describe("Hex-encoded calldata (0x-prefixed)"),
-          value: z
-            .string()
-            .default("0")
-            .describe("Value in wei as a string (defaults to '0')"),
-        }),
-      )
-      .min(1)
-      .max(20)
-      .describe(
-        "Array of raw EVM calls to execute. Each call has 'to' (address), 'data' (hex calldata), and optional 'value' (wei as string)",
-      ),
+    calls: z.preprocess(
+      (value, ctx) => {
+        if (typeof value !== "string") return value;
+        try {
+          return JSON.parse(value) as unknown;
+        } catch {
+          ctx.addIssue({
+            code: "custom",
+            message: "--calls must be valid JSON containing an array of calls",
+          });
+          return z.NEVER;
+        }
+      },
+      z
+        .array(
+          z.object({
+            to: z
+              .string()
+              .regex(/^0x[a-fA-F0-9]{40}$/, "Invalid address")
+              .describe("Target contract address (0x-prefixed, 40 hex chars)"),
+            data: z
+              .string()
+              .regex(/^0x[a-fA-F0-9]*$/, "Invalid hex calldata")
+              .describe("Hex-encoded calldata (0x-prefixed)"),
+            value: z
+              .string()
+              .default("0")
+              .describe("Value in wei as a string (defaults to '0')"),
+          }),
+        )
+        .min(1)
+        .max(20),
+    ).describe(
+      "Array of raw EVM calls; on the CLI, pass one JSON array. Each call has 'to' (address), 'data' (hex calldata), and optional 'value' (wei as string)",
+    ),
     memo: z
       .string()
       .max(500)
@@ -3153,7 +3298,10 @@ transactions.command("sign", {
     "Fetches the transaction's signingHash, produces a personal_sign signature locally, " +
     "and submits it via POST /public/v1/transactions/:id/sign. " +
     "By default auto-submits the UserOp when this signature meets threshold; " +
-    "pass --no-submit to record only. Retries once on a stale signer nonce.",
+    "pass --no-submit to record only. Retries once on a stale signer nonce. " +
+    "A signer or network change proposal ('accounts update-signers', 'accounts add-networks') submits on every network at once. " +
+    "On a multisig, run 'transactions update-gas-estimation <id>' before the last signature; " +
+    "otherwise the sign is rejected because the signingHash is stale.",
   env: authEnv,
   args: z.object({
     id: transactionId.describe("Transaction ID to sign"),
@@ -3386,7 +3534,8 @@ const settings = Cli.create("settings", {
 });
 
 settings.command("get", {
-  description: "Get your org's settings",
+  description:
+    "Get your org's settings: name, memo requirement, and auto-earn state (enabled and eligible chain ids, and any pending auto-earn transaction).",
   env: authEnv,
   options: workspaceOption,
   async run({ env: processEnv, options }) {
@@ -3553,6 +3702,196 @@ automations.command("create", {
 });
 
 cli.command(automations);
+
+// =============================================================================
+// invoices
+// ======================================================================
+const invoices = Cli.create("invoices", {
+  description: "Invoices billed by the org",
+});
+
+invoices.command("list", {
+  description:
+    "List the org's invoices, newest first. Each invoice has a url where the payer views and pays it.",
+  env: authEnv,
+  options: workspaceOption.extend({
+    statuses: z
+      .string()
+      .optional()
+      .describe(
+        "Comma-separated statuses to include: paid, unpaid, void. Omit to return every invoice except void ones.",
+      ),
+  }),
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
+    return apiRequest(
+      env,
+      `/invoices${buildQuery({ statuses: options.statuses })}`,
+    );
+  },
+});
+
+invoices.command("get", {
+  description: "Get an invoice by id",
+  env: authEnv,
+  args: z.object({
+    id: z.string().uuid().describe("Invoice ID"),
+  }),
+  options: workspaceOption,
+  async run({ env: processEnv, args, options }) {
+    const env = await withWorkspace(processEnv, options);
+    return apiRequest(env, `/invoices/${args.id}`);
+  },
+});
+
+invoices.command("create", {
+  description:
+    "Create an invoice and email it to --payer-email right away. Without --payer-email, no email is sent. With --interval and --due-date-days, it also creates a schedule that emails a new invoice before each due date; when the first issue date is still in the future or the first due date has passed, only the schedule is created and the next daily run picks it up. Requires an owner-scoped key for an org owner and the Pro plan.",
+  env: authEnv,
+  options: workspaceOption.extend({
+    accountAddress: evmAddress
+      .optional()
+      .describe(
+        "Account that receives the payment. Auto-selected if the org has one account.",
+      ),
+    payeeName: z.string().min(1).describe("Name of who is billing"),
+    payerName: z.string().min(1).describe("Name of who pays"),
+    payerEmail: z
+      .string()
+      .email()
+      .optional()
+      .describe("Email the invoice is sent to"),
+    ccEmails: z
+      .string()
+      .optional()
+      .describe(
+        "Comma-separated emails that get a copy (max 10). Requires --payer-email.",
+      ),
+    amount: z
+      .string()
+      .regex(/^\d+(\.\d+)?$/, "Amount must be a positive decimal")
+      .describe("Amount in token units (e.g. 1500.00)"),
+    chainId: z.number().int().positive().describe("Chain the payer pays on"),
+    tokenAddress: evmAddress.describe("Token the payer pays in"),
+    dueDate: z
+      .string()
+      .datetime()
+      .describe(
+        "Due date, ISO 8601 (e.g. 2026-11-01T00:00:00Z). With a schedule, the first due date. Dates count as UTC calendar days.",
+      ),
+    memo: z.string().optional().describe("Memo shown on the invoice"),
+    allowFiatPayments: z
+      .boolean()
+      .optional()
+      .describe("Let the payer pay by bank transfer. Defaults to true."),
+    interval: z
+      .enum(["WEEKLY", "MONTHLY", "YEARLY", "ONCE"])
+      .optional()
+      .describe(
+        "Repeat the invoice on each due date. ONCE sends a single invoice on its issue date. Requires --due-date-days.",
+      ),
+    dueDateDays: z
+      .number()
+      .int()
+      .nonnegative()
+      .optional()
+      .describe(
+        "Days between each issue date and its due date. Requires --interval.",
+      ),
+  }),
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
+
+    if (
+      (options.interval === undefined) !==
+      (options.dueDateDays === undefined)
+    ) {
+      throw new Error("Pass --interval and --due-date-days together.");
+    }
+
+    let accountAddress = options.accountAddress;
+    if (!accountAddress) {
+      const result = await apiRequest<{
+        data: Array<{ address: string }>;
+      }>(env, "/org/accounts");
+      if (result.data.length !== 1) {
+        throw new Error(
+          `Specify --account-address: ${result.data.map((a) => a.address).join(", ")}`,
+        );
+      }
+      accountAddress = result.data[0].address;
+    }
+
+    return apiRequest(env, "/invoices", {
+      method: "POST",
+      body: {
+        accountAddress,
+        payeeName: options.payeeName,
+        payerName: options.payerName,
+        ...(options.payerEmail !== undefined && {
+          payerEmail: options.payerEmail,
+        }),
+        ...(options.ccEmails !== undefined && {
+          ccEmails: options.ccEmails
+            .split(",")
+            .map((email) => email.trim())
+            .filter(Boolean),
+        }),
+        amount: options.amount,
+        chainId: options.chainId,
+        tokenAddress: options.tokenAddress,
+        dueDate: options.dueDate,
+        ...(options.memo !== undefined && { memo: options.memo }),
+        ...(options.allowFiatPayments !== undefined && {
+          allowFiatPayments: options.allowFiatPayments,
+        }),
+        ...(options.interval !== undefined && {
+          schedule: {
+            interval: options.interval,
+            dueDateDays: options.dueDateDays,
+          },
+        }),
+      },
+    });
+  },
+});
+
+cli.command(invoices);
+
+// =============================================================================
+// feedback
+// =============================================================================
+
+const feedback = Cli.create("feedback", {
+  description: "Feedback to the Splits team",
+});
+
+feedback.command("send", {
+  description:
+    "Send feedback to the Splits team about the API, this CLI, or the MCP server. " +
+    "Use it when a command fails in a way its help does not explain, a capability is missing, " +
+    "or a response is confusing. Include the goal, the command or request you ran, what came back, " +
+    "and what you expected. The Splits team gets it by email and can follow up with the user who owns the API key. " +
+    "Never include API keys, private keys, or other secrets.",
+  env: authEnv,
+  options: workspaceOption.extend({
+    text: z
+      .string()
+      .trim()
+      .min(1)
+      .max(5000)
+      .describe("The feedback: goal, command or request, response, and what was expected (max 5000 characters)"),
+  }),
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
+    return apiRequest(env, "/feedback", {
+      method: "POST",
+      body: { text: options.text },
+    });
+  },
+});
+
+cli.command(feedback);
 
 // =============================================================================
 // org (unauthenticated commands)
