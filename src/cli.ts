@@ -270,7 +270,8 @@ const auth = Cli.create("auth", {
 
 auth.command("whoami", {
   description:
-    "Show current org, API key name, and scopes. " +
+    "Show current org, API key name, and scopes, and the user the key acts as " +
+    "(`user.kind` is AGENT when the key belongs to an agent member of the workspace, null for an org-level key). " +
     "Also reports the workspace the credentials came from (null when SPLITS_API_KEY is set), " +
     "whether they came from the environment or the local keystore, and the local EOA signing " +
     "keys saved by `splits auth create-key` or `import-key`. For each local key registered " +
@@ -382,6 +383,12 @@ const loginOutcomeMessage = (
     ? WRONG_CODE_DENIAL_MESSAGE
     : LOGIN_OUTCOME_MESSAGE_BY_STATUS[result.status];
 
+type WhoamiUser = {
+  id: string;
+  kind: "HUMAN" | "AGENT";
+  displayName: string | null;
+};
+
 const saveApprovedLogin = async ({
   grant,
   apiUrl,
@@ -406,22 +413,23 @@ const saveApprovedLogin = async ({
     apiKey: grant.apiKey,
     apiUrl,
   });
-  const verified = await httpRequest(
+  const whoami = await httpRequest<{ data: { user: WhoamiUser | null } }>(
     { apiKey: grant.apiKey, apiUrl: apiUrl ?? DEFAULT_API_URL },
     "/auth/whoami",
     { requireAuth: true },
   ).then(
-    () => true,
+    (response) => ({ verified: true, user: response.data.user ?? null }),
     (error: unknown) => {
       process.stderr.write(
         `Warning: the workspace was saved, but checking its key failed: ${error instanceof Error ? error.message : String(error)}. Run \`splits auth whoami\` to retry.\n`,
       );
-      return false;
+      return { verified: false, user: null };
     },
   );
   return {
     saved: true,
-    verified,
+    verified: whoami.verified,
+    user: whoami.user,
     workspace: alias,
     replaced,
     orgId: grant.orgId,
