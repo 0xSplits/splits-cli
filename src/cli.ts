@@ -42,6 +42,7 @@ import {
 import { downloadToFile, httpRequest, SplitsApiError } from "./http.js";
 import { PERIODS, resolvePeriod, type Period } from "./periods.js";
 import { bytes32Hash, evmAddress, transactionId } from "./schemas.js";
+import { askPerson, canAskPerson, captureMcpToolCalls } from "./mcp-context.js";
 import { signMessageLocally, signTransactionLocally } from "./signing.js";
 
 const AMOUNT_REGEX = /^(0|[1-9]\d*)(\.\d+)?$/;
@@ -1110,34 +1111,146 @@ const workspace = Cli.create("workspace", {
   description: "Create Splits workspaces.",
 });
 
+const WORKSPACE_OWNER_QUESTION =
+  "Ask the person who should own the new workspace, then call again with their answer in owner: " +
+  "`person` (they approve it in the browser and their login email recovers it) or `agent` (you own it, " +
+  "no browser, and recoveryEmail is the email of the person who can recover it). Never choose for them.";
+
+const OWNER_CHOICE_LABEL_BY_OWNER = {
+  person: "Me, approving in the browser",
+  agent: "The agent, with a recovery email",
+} as const;
+
+type WorkspaceOwner = keyof typeof OWNER_CHOICE_LABEL_BY_OWNER;
+
+type WorkspaceOwnerChoice =
+  | { owner: "person" }
+  | { owner: "agent"; recoveryEmail: string }
+  | { owner: null; reason: "declined" | "dismissed" };
+
+const workspaceOwners = Object.keys(OWNER_CHOICE_LABEL_BY_OWNER) as WorkspaceOwner[];
+
+const isWorkspaceOwner = (value: unknown): value is WorkspaceOwner =>
+  workspaceOwners.some((owner) => owner === value);
+
+const nonEmptyString = (value: unknown): string | undefined =>
+  typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
+
+const askRecoveryEmail = async (name: string): Promise<string | undefined> => {
+  const result = await askPerson({
+    message: `Which email can recover the workspace "${name}"? That person becomes an owner when they log in to Splits.`,
+    requestedSchema: {
+      type: "object",
+      properties: {
+        recoveryEmail: { type: "string", format: "email", title: "Recovery email" },
+      },
+      required: ["recoveryEmail"],
+    },
+  });
+  return result.action === "accept"
+    ? nonEmptyString(result.content?.recoveryEmail)
+    : undefined;
+};
+
+const askWorkspaceOwner = async ({
+  name,
+  owner,
+  recoveryEmail,
+}: {
+  name: string;
+  owner: WorkspaceOwner | undefined;
+  recoveryEmail: string | undefined;
+}): Promise<WorkspaceOwnerChoice> => {
+  const result = await askPerson({
+    message: `Who should own the new Splits workspace "${name}"?`,
+    requestedSchema: {
+      type: "object",
+      properties: {
+        owner: {
+          type: "string",
+          title: "Owner",
+          enum: workspaceOwners,
+          enumNames: workspaceOwners.map((o) => OWNER_CHOICE_LABEL_BY_OWNER[o]),
+          ...(owner === undefined ? {} : { default: owner }),
+        },
+        recoveryEmail: {
+          type: "string",
+          format: "email",
+          title: "Recovery email (only when the agent owns it)",
+          ...(recoveryEmail === undefined ? {} : { default: recoveryEmail }),
+        },
+      },
+      required: ["owner"],
+    },
+  });
+  if (result.action === "decline") return { owner: null, reason: "declined" };
+  if (result.action === "cancel") return { owner: null, reason: "dismissed" };
+  const chosen = result.content?.owner;
+  if (chosen === "person") return { owner: "person" };
+  if (chosen !== "agent") return { owner: null, reason: "dismissed" };
+  const email =
+    nonEmptyString(result.content?.recoveryEmail) ?? (await askRecoveryEmail(name));
+  return email === undefined
+    ? { owner: null, reason: "dismissed" }
+    : { owner: "agent", recoveryEmail: email };
+};
+
+const resolveWorkspaceOwner = async ({
+  name,
+  owner,
+  recoveryEmail,
+}: {
+  name: string;
+  owner: WorkspaceOwner | undefined;
+  recoveryEmail: string | undefined;
+}): Promise<WorkspaceOwnerChoice> => {
+  if (mcpMode() && canAskPerson()) {
+    const asked = await askWorkspaceOwner({ name, owner, recoveryEmail });
+    if (asked.owner !== null || asked.reason === "declined" || owner === undefined) {
+      return asked;
+    }
+  }
+  const decided = owner ?? (mcpMode() ? undefined : recoveryEmail ? "agent" : "person");
+  if (decided === undefined) throw new Error(WORKSPACE_OWNER_QUESTION);
+  if (decided === "person") return { owner: "person" };
+  if (recoveryEmail === undefined) {
+    throw new Error(
+      "An agent-owned workspace needs recoveryEmail. Ask the person which email can recover it; never make one up.",
+    );
+  }
+  return { owner: "agent", recoveryEmail };
+};
+
 workspace.command("create", {
   description:
-    "Create a new Splits workspace through the person's browser approval. Opens the approval page " +
-    "on its create tab, prefilled with the name and chains; the person logs in, can change them, and " +
-    "approves. The person becomes the workspace's owner. Two accounts are created, at the same " +
-    "address on every chosen chain: the root, whose only signer is the person's login email and which " +
-    "owns the treasury, so the person can always recover it; and the treasury, whose only signer is " +
-    "this agent's local key, and which is the workspace's deposit address. " +
-    "The person can also connect an existing workspace instead. On approval the API key is saved as a " +
-    "new workspace and made active; the key never appears in the output. " +
-    "The person must enter a code on the page. Outside MCP the command prints the code, waits up to " +
-    "10 minutes for the approval and prints a diagram of the accounts. " +
-    "Under MCP it returns the approval URL and the code without waiting: show both to the person, then call " +
-    "`auth login-status` right away, which waits for the approval, saves the workspace and returns the diagram. " +
+    "Create a new Splits workspace. It has one of two owners, and the person chooses which. " +
+    "In MCP clients that can show a form, this tool asks the person itself: call it without asking them first. " +
+    "If it returns `cancelled` because the form was closed or could not be shown, ask the person in the chat " +
+    "and call again with their answer in owner. In other clients, ask the person and pass owner. " +
+    "With owner `person`, the person approves in the browser: the approval page opens on its create tab, " +
+    "prefilled with the name and chains; the person logs in, can change them, and approves, and becomes the " +
+    "owner. The person must enter a code on the page. Outside MCP the command prints the code, waits up to " +
+    "10 minutes for the approval and prints a diagram of the accounts. Under MCP it returns the approval URL " +
+    "and the code without waiting: show both to the person, then call `auth login-status` right away, which " +
+    "waits for the approval, saves the workspace and returns the diagram. The person can also connect an " +
+    "existing workspace instead. " +
+    "With owner `agent`, no person approves: the workspace is created at once, this agent is its only owner, " +
+    "and its API key has every scope. The recovery email is the root signer, and the person at that email " +
+    "becomes an owner when they log in to Splits with it; Splits sends it no email and does not check it. " +
+    "A new local key is saved before the call. A key creates one workspace: calling again with the same key " +
+    "returns a new API key for that workspace. Off-ramp and paid plans need a person, so they stay " +
+    "unavailable until the person joins. " +
+    "Either way two accounts are created, at the same address on every chosen chain: the root, which owns " +
+    "the treasury and is recovered by the email; and the treasury, whose only signer is this agent's local " +
+    "key, and which is the workspace's deposit address. The API key is saved as a new active workspace and " +
+    "never appears in the output. " +
     "Use this rather than `org create` when this agent will work in the new workspace: `org create` only " +
-    "emails the person a setup link and gives this agent no API key and no signer. " +
-    "With --recovery-email, no person takes part: the workspace is created at once, without a browser, " +
-    "and this agent is its only owner, with an API key that has every scope. The recovery email replaces " +
-    "the person's login email as the root signer, and the person at that email becomes an owner when they " +
-    "log in to Splits with it; Splits sends it no email and does not check it, so pass an address the " +
-    "person gave you. A new local key is saved before the call. A key creates one workspace: calling again " +
-    "with the same --key returns a new API key for that workspace, which is how an agent that lost its API key " +
-    "gets a new one. Off-ramp and paid plans need a person, so they stay unavailable until the person joins.",
+    "emails the person a setup link and gives this agent no API key and no signer.",
   env: authEnv,
   options: browserLoginOptions.omit({ name: true }).extend({
     key: browserLoginOptions.shape.key.describe(
       "Saved local key that proves this agent and becomes the treasury signer. Without it, a new key is used: " +
-        "in a browser login it is saved only when the person creates a workspace, and with --recovery-email it " +
+        "with owner `person` it is saved only when the person creates a workspace, and with owner `agent` it " +
         "is saved before the call.",
     ),
     name: z
@@ -1147,7 +1260,7 @@ workspace.command("create", {
       .max(255)
       .describe(
         "Workspace name to prefill. The local workspace alias is derived from the name the person approves, " +
-          "or from this name with --recovery-email.",
+          "or from this name when the agent owns the workspace.",
       ),
     chainIds: z
       .string()
@@ -1155,14 +1268,23 @@ workspace.command("create", {
       .describe(
         "Comma-separated chain ids to prefill (e.g. '8453,1'). Defaults to the chains a new workspace gets in the app.",
       ),
+    owner: z
+      .enum(["person", "agent"])
+      .optional()
+      .describe(
+        "Who owns the workspace, as the person chose it in the chat. Never choose for them. Where the client " +
+          "shows a form, the person's answer in the form wins, and this is used only when the form was closed " +
+          "without an answer or could not be shown. Outside MCP it defaults to `agent` with --recovery-email " +
+          "and to `person` without it.",
+      ),
     recoveryEmail: z
       .string()
       .trim()
       .email()
       .optional()
       .describe(
-        "Create the workspace without a browser, owned by this agent. The email of the person who can " +
-          "recover it: it becomes the root signer, and that person joins as an owner when they log in to Splits.",
+        "Only with owner `agent`: the email of the person who can recover the workspace, as they gave it. " +
+          "It becomes the root signer, and that person joins as an owner when they log in to Splits.",
       ),
   }),
   async run({ env, options }) {
@@ -1174,13 +1296,29 @@ workspace.command("create", {
           ? undefined
           : parseChainIds(options.chainIds),
     };
-    if (options.recoveryEmail !== undefined) {
+    const choice = await resolveWorkspaceOwner({
+      name: options.name,
+      owner: options.owner,
+      recoveryEmail: options.recoveryEmail,
+    });
+    if (choice.owner === null) {
+      return {
+        status: "cancelled",
+        message:
+          choice.reason === "declined"
+            ? "The person declined. No workspace was created."
+            : "The form asking who should own the workspace was closed without an answer, or this client " +
+              "could not show it. No workspace was created. " +
+              WORKSPACE_OWNER_QUESTION,
+      };
+    }
+    if (choice.owner === "agent") {
       return runAutonomousCreate({
         env,
         apiUrl,
         key: options.key,
         clientName: options.clientName,
-        recoveryEmail: options.recoveryEmail,
+        recoveryEmail: choice.recoveryEmail,
         workspace: createWorkspace,
       });
     }
@@ -4023,6 +4161,8 @@ org.command("create", {
 });
 
 cli.command(org);
+
+if (process.argv.includes("--mcp")) await captureMcpToolCalls();
 
 cli.serve();
 export default cli;
