@@ -3709,8 +3709,16 @@ const parseOutputsOption = (
 
   const result = automationOutputsSchema.safeParse(parsed);
   if (!result.success) {
+    const issues = result.error.issues.map((issue) => {
+      const path = issue.path.reduce<string>(
+        (prefix, key) =>
+          typeof key === "number" ? `${prefix}[${key}]` : `${prefix}.${String(key)}`,
+        "outputs",
+      );
+      return `${path}: ${issue.message}`;
+    });
     throw new Error(
-      "--outputs must be a JSON array of { percent, targetChainId, targetTokenAddress, destinationAddress }.",
+      `--outputs must be a JSON array of { percent, targetChainId, targetTokenAddress, destinationAddress }. ${issues.join("; ")}`,
     );
   }
   return result.data;
