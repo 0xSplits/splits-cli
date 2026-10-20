@@ -11,6 +11,7 @@ import {
   type AgentLoginGrant,
   type FinishedAgentLogin,
   type CreateWorkspacePrefill,
+  createAutonomousWorkspace,
   describeCreatedWorkspace,
   openInBrowser,
   pollAgentLogin,
@@ -496,6 +497,54 @@ const runBrowserLogin = async ({
   if (saved.diagram !== null) process.stderr.write(`${saved.diagram}\n`);
   warnIfEnvKeySet(env);
   return { ...saved, signerAddress: account.address };
+};
+
+const runAutonomousCreate = async ({
+  env,
+  apiUrl,
+  key,
+  clientName,
+  recoveryEmail,
+  workspace,
+}: {
+  env: z.infer<typeof authEnv>;
+  apiUrl: string | undefined;
+  key: string | undefined;
+  clientName: string;
+  recoveryEmail: string;
+  workspace: CreateWorkspacePrefill;
+}) => {
+  const { account, freshPrivateKey } = await loginSigner(key);
+  if (freshPrivateKey !== null) {
+    await saveKey({
+      name: workspace.name,
+      address: account.address,
+      privateKey: freshPrivateKey,
+    });
+  }
+  const grant = await createAutonomousWorkspace({
+    apiUrl: apiUrl ?? DEFAULT_API_URL,
+    signer: account,
+    clientName,
+    recoveryEmail,
+    workspace,
+  });
+  const saved = await saveApprovedLogin({
+    grant,
+    apiUrl,
+    name: undefined,
+    signerAddress: account.address,
+    freshPrivateKey: null,
+  });
+  if (!mcpMode() && saved.diagram !== null) {
+    process.stderr.write(`${saved.diagram}\n`);
+  }
+  warnIfEnvKeySet(env);
+  return {
+    ...saved,
+    keySaved: freshPrivateKey !== null,
+    signerAddress: account.address,
+  };
 };
 
 const startPendingLogin = async ({
@@ -1062,7 +1111,14 @@ workspace.command("create", {
     "Under MCP it returns the approval URL and the code without waiting: show both to the person, then call " +
     "`auth login-status` right away, which waits for the approval, saves the workspace and returns the diagram. " +
     "Use this rather than `org create` when this agent will work in the new workspace: `org create` only " +
-    "emails the person a setup link and gives this agent no API key and no signer.",
+    "emails the person a setup link and gives this agent no API key and no signer. " +
+    "With --recovery-email, no person takes part: the workspace is created at once, without a browser, " +
+    "and this agent is its only owner, with an API key that has every scope. The recovery email replaces " +
+    "the person's login email as the root signer, and the person at that email becomes an owner when they " +
+    "log in to Splits with it; Splits sends it no email and does not check it, so pass an address the " +
+    "person gave you. A new local key is saved before the call. A key creates one workspace: calling again " +
+    "with the same --key returns a new API key for that workspace, which is how an agent that lost its API key " +
+    "gets a new one. Off-ramp and paid plans need a person, so they stay unavailable until the person joins.",
   env: authEnv,
   options: browserLoginOptions.omit({ name: true }).extend({
     name: z
@@ -1079,6 +1135,15 @@ workspace.command("create", {
       .describe(
         "Comma-separated chain ids to prefill (e.g. '8453,1'). Defaults to the chains a new workspace gets in the app.",
       ),
+    recoveryEmail: z
+      .string()
+      .trim()
+      .email()
+      .optional()
+      .describe(
+        "Create the workspace without a browser, owned by this agent. The email of the person who can " +
+          "recover it: it becomes the root signer, and that person joins as an owner when they log in to Splits.",
+      ),
   }),
   async run({ env, options }) {
     const apiUrl = resolveLoginApiUrl(env, options.apiUrl);
@@ -1089,6 +1154,16 @@ workspace.command("create", {
           ? undefined
           : parseChainIds(options.chainIds),
     };
+    if (options.recoveryEmail !== undefined) {
+      return runAutonomousCreate({
+        env,
+        apiUrl,
+        key: options.key,
+        clientName: options.clientName,
+        recoveryEmail: options.recoveryEmail,
+        workspace: createWorkspace,
+      });
+    }
     const login = {
       apiUrl,
       key: options.key,

@@ -97,6 +97,53 @@ export const startAgentLogin = async ({
   return { ...data, codeVerifier };
 };
 
+export const createAutonomousWorkspace = async ({
+  apiUrl,
+  signer,
+  clientName,
+  recoveryEmail,
+  workspace,
+}: {
+  apiUrl: string;
+  signer: MessageSigner;
+  clientName: string;
+  recoveryEmail: string;
+  workspace: CreateWorkspacePrefill;
+}): Promise<AgentLoginGrant> => {
+  const credentials = { apiKey: null, apiUrl };
+  const { data: challenge } = await httpRequest<{
+    data: { nonce: string; message: string };
+  }>(credentials, "/workspaces/challenge", {
+    method: "POST",
+    requireAuth: false,
+    body: { address: signer.address },
+  }).catch((error: unknown) => {
+    if (error instanceof SplitsApiError && error.status === 404) {
+      throw new Error(
+        `${apiUrl} does not support creating a workspace without a browser yet. Run \`splits workspace create\` without --recovery-email.`,
+      );
+    }
+    throw error;
+  });
+
+  const signature = await signer.signMessage({ message: challenge.message });
+  const { data } = await httpRequest<{ data: AgentLoginGrant }>(
+    credentials,
+    "/workspaces",
+    {
+      method: "POST",
+      requireAuth: false,
+      body: {
+        clientName,
+        recoveryEmail,
+        workspace,
+        signer: { address: signer.address, nonce: challenge.nonce, signature },
+      },
+    },
+  );
+  return data;
+};
+
 export const pollAgentLogin = async ({
   apiUrl,
   requestId,
