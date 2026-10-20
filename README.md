@@ -262,6 +262,16 @@ splits transactions list --user-op-hash 0x1dfe...dcf
 
 Each row in the response includes a `direction` field (`inbound` or `outbound`) so you can verify the filter result. Splits-initiated transactions are always `outbound`. Each row also includes `transactionHash` and `userOpHash` (both nullable) so you can correlate splits records with explorers and bundler webhooks; the same two fields are returned by `splits transactions get`.
 
+Each row also has a `dataType` and one object with the details for that kind:
+
+| `dataType` | Object | What it holds |
+|---|---|---|
+| `transaction` | `transactionData` | `types`, `source`, `submittedAt`, `completedAt`, `failureReason`, `revertReason`, `usdNetValue`, `isSponsored`, `gasPaidBy`, `recipients`, raw per-operation `metadata` |
+| `merkleTransaction` | `merkleTransactionData` | `chainIds`, `types`, `source`, timestamps, and `chainTransactions`: one entry per network with its `status`, hashes and `transactionData` |
+| `assetTransfer` | `assetTransferData` | `assetType`, `tokenAddress`, `tokenId`, `tokenSymbol`, `tokenDecimals`, `amount` (base units), `usdValue`, `from`, `to`, `onrampSourceName` |
+
+A proposal that runs on several networks, such as a signer change, has a null top-level `chainId`, `transactionHash` and `userOpHash`. Read each network's values from `merkleTransactionData.chainTransactions`. `splits transactions get` returns the same item shape, and the `transactions create` commands return these fields for the proposal they create. Older API versions return rows without these fields.
+
 `--period` is mutually exclusive with `--start-date` / `--end-date`. Valid period values: `thisWeek`, `thisMonth`, `thisYear`, `lastWeek`, `lastMonth`, `lastYear`, `last30Days`, `last90Days`, `last6Months`.
 
 ### Accounts
@@ -478,7 +488,7 @@ The MCP server exposes these tools:
 - `accounts_create` — Create a new subaccount
 - `accounts_update_signers` — Propose adding/removing signers (EOA adds reference ids from `auth_register_signer`)
 - `transactions_sign` — Sign a pending multisig transaction with a local EOA
-- `auth_whoami` — Show org, workspace, API key source, and local signing keys
+- `auth_whoami` — Show org, workspace, the user the key acts as (an agent member or a person), API key source, and local signing keys
 - `auth_login` / `auth_logout` — Save or remove a workspace (stdin-preferred; `--api-key` flag refused under MCP)
 - `auth_login-start` / `auth_login-status` — Log in through a browser approval without the API key passing through the conversation
 - `workspace_create` — Create a new workspace through a browser approval: the person's email holds the root, this agent's key the treasury
