@@ -480,7 +480,7 @@ The MCP server exposes these tools:
 - `accounts_create` — Create a new subaccount
 - `accounts_update_signers` — Propose adding/removing signers (EOA adds reference ids from `auth_register_signer`)
 - `transactions_sign` — Sign a pending multisig transaction with a local EOA
-- `auth_whoami` — Show org, workspace, API key source, and local signing keys
+- `auth_whoami` — Show org, workspace, the user the key acts as (an agent member or a person), API key source, and local signing keys
 - `auth_login` / `auth_logout` — Save or remove a workspace (stdin-preferred; `--api-key` flag refused under MCP)
 - `auth_login-start` / `auth_login-status` — Log in through a browser approval without the API key passing through the conversation
 - `workspace_create` — Create a new workspace through a browser approval: the person's email holds the root, this agent's key the treasury
