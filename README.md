@@ -399,6 +399,23 @@ splits members list
 splits members signers <userId>
 ```
 
+### Automations
+
+```sh
+# List automations
+splits automations list
+
+# Create a forwarding address: everything it receives goes as-is to one wallet
+splits automations create --name "Forward to treasury" --forwarder 0xWallet
+
+# Receive any token on any chain, swap it to USDC on Base, and send it to a wallet
+splits automations create --name "To USDC on Base" \
+  --pass-through-destination-address 0xWallet \
+  --outputs '[{"percent":100,"targetChainId":8453,"targetTokenAddress":"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913","destinationAddress":"0xWallet"}]'
+```
+
+Creating an automation needs an owner-scoped key. The new account distributes every balance it receives without a signature, so check the destination addresses before you share it. Editing an automation stays in the web app, behind a passkey.
+
 ### Invoices
 
 ```sh

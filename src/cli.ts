@@ -3701,6 +3701,156 @@ automations.command("list", {
   },
 });
 
+const automationOutputSchema = z.object({
+  percent: z.number().int().min(1).max(100),
+  targetChainId: z.number().int().positive(),
+  targetTokenAddress: z.string().regex(EVM_ADDRESS_RE, "Invalid token address"),
+  destinationAddress: z
+    .string()
+    .regex(EVM_ADDRESS_RE, "Invalid destination address"),
+}).strict();
+const automationOutputsSchema = z.array(automationOutputSchema);
+
+const parseOutputsOption = (
+  value: z.infer<typeof automationOutputsSchema> | string | undefined,
+): z.infer<typeof automationOutputsSchema> => {
+  if (value === undefined) return [];
+  if (typeof value !== "string") return value;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error("Invalid JSON array for --outputs.");
+  }
+
+  const result = automationOutputsSchema.safeParse(parsed);
+  if (!result.success) {
+    const issues = result.error.issues.map((issue) => {
+      const path = issue.path.reduce<string>(
+        (prefix, key) =>
+          typeof key === "number" ? `${prefix}[${key}]` : `${prefix}.${String(key)}`,
+        "outputs",
+      );
+      return `${path}: ${issue.message}`;
+    });
+    throw new Error(
+      `--outputs must be a JSON array of { percent, targetChainId, targetTokenAddress, destinationAddress }. ${issues.join("; ")}`,
+    );
+  }
+  return result.data;
+};
+
+automations.command("create", {
+  description:
+    "Create an automation: a new account that distributes every balance it receives without a signature. Pass-through sends a share of each balance as-is to one address on the same chain; each output swaps and/or bridges its share to a token on a chain and sends it to an address. The pass-through percent plus the output percents must equal 100. Use --forwarder for a plain forwarding address. Requires an owner-scoped key.",
+  env: authEnv,
+  options: workspaceOption.extend({
+    name: z.string().min(1).max(255).describe("Automation name"),
+    memo: z.string().max(1000).optional().describe("Optional memo"),
+    forwarder: z
+      .string()
+      .regex(EVM_ADDRESS_RE, "Invalid forwarder address")
+      .optional()
+      .describe(
+        "Forward 100% of every balance, as-is, to this address. Cannot be combined with the pass-through or output options.",
+      ),
+    passThroughPercent: z
+      .number()
+      .int()
+      .min(0)
+      .max(100)
+      .optional()
+      .describe(
+        "Percent of each balance sent as-is to the pass-through destination. Defaults to 100 minus the output percents.",
+      ),
+    passThroughDestinationAddress: z
+      .string()
+      .regex(EVM_ADDRESS_RE, "Invalid pass-through destination address")
+      .optional()
+      .describe(
+        "Address that receives the pass-through share. Required without --forwarder, even when the pass-through percent is 0; the web app uses the same address as the outputs.",
+      ),
+    outputs: z
+      .union([automationOutputsSchema, z.string()])
+      .optional()
+      .describe(
+        'JSON array of outputs, each { percent, targetChainId, targetTokenAddress, destinationAddress }. Example: \'[{"percent":100,"targetChainId":8453,"targetTokenAddress":"0x8335…","destinationAddress":"0x…"}]\'',
+      ),
+    minimumThresholdUsd: z
+      .number()
+      .int()
+      .min(0)
+      .default(5)
+      .describe(
+        "Smallest balance, in USD, that triggers a run. Defaults to 5, like the web app.",
+      ),
+    slippage: z
+      .number()
+      .int()
+      .min(1)
+      .max(1000)
+      .default(150)
+      .describe(
+        "Maximum slippage for swaps and bridges, in basis points. Defaults to 150, like the web app.",
+      ),
+  }),
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
+    const outputs = parseOutputsOption(options.outputs);
+
+    if (options.forwarder !== undefined) {
+      if (
+        options.passThroughPercent !== undefined ||
+        options.passThroughDestinationAddress !== undefined ||
+        outputs.length > 0
+      ) {
+        throw new Error(
+          "--forwarder cannot be combined with --pass-through-percent, --pass-through-destination-address, or --outputs.",
+        );
+      }
+    } else if (options.passThroughDestinationAddress === undefined) {
+      throw new Error(
+        "Pass --forwarder, or --pass-through-destination-address with optional --outputs.",
+      );
+    }
+
+    const outputPercent = outputs.reduce((sum, o) => sum + o.percent, 0);
+    if (outputPercent > 100) {
+      throw new Error(
+        `The output percents add up to ${outputPercent}, more than 100.`,
+      );
+    }
+    const passThroughPercent =
+      options.forwarder !== undefined
+        ? 100
+        : (options.passThroughPercent ?? 100 - outputPercent);
+    if (passThroughPercent + outputPercent !== 100) {
+      throw new Error(
+        `The pass-through percent (${passThroughPercent}) plus the output percents (${outputPercent}) must equal 100.`,
+      );
+    }
+    const policy = {
+      version: 1,
+      minimumThresholdUsd: options.minimumThresholdUsd,
+      slippage: options.slippage,
+      passThroughPercent,
+      passThroughDestinationAddress:
+        options.forwarder ?? options.passThroughDestinationAddress,
+      outputs,
+    };
+
+    return apiRequest<{ data?: unknown }>(env, "/automations", {
+      method: "POST",
+      body: {
+        name: options.name,
+        ...(options.memo !== undefined && { memo: options.memo }),
+        policy,
+      },
+    });
+  },
+});
+
 cli.command(automations);
 
 // =============================================================================
