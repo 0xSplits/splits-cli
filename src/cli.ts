@@ -279,7 +279,8 @@ const auth = Cli.create("auth", {
 
 auth.command("whoami", {
   description:
-    "Show current org, API key name, and scopes. " +
+    "Show the current org, the API key name and scopes, and the user the key acts as. " +
+    "`user.kind` is AGENT when the key belongs to an agent. " +
     "Also reports the workspace the credentials came from (null when SPLITS_API_KEY is set), " +
     "whether they came from the environment or the local keystore, and the local EOA signing " +
     "keys saved by `splits auth create-key` or `import-key`. For each local key registered " +
@@ -391,6 +392,12 @@ const loginOutcomeMessage = (
     ? WRONG_CODE_DENIAL_MESSAGE
     : LOGIN_OUTCOME_MESSAGE_BY_STATUS[result.status];
 
+type WhoamiUser = {
+  id: string;
+  kind: "HUMAN" | "AGENT";
+  displayName: string | null;
+};
+
 const saveApprovedLogin = async ({
   grant,
   apiUrl,
@@ -415,22 +422,23 @@ const saveApprovedLogin = async ({
     apiKey: grant.apiKey,
     apiUrl,
   });
-  const verified = await httpRequest(
+  const whoami = await httpRequest<{ data: { user: WhoamiUser | null } }>(
     { apiKey: grant.apiKey, apiUrl: apiUrl ?? DEFAULT_API_URL },
     "/auth/whoami",
     { requireAuth: true },
   ).then(
-    () => true,
+    (response) => ({ verified: true, user: response.data.user ?? null }),
     (error: unknown) => {
       process.stderr.write(
         `Warning: the workspace was saved, but checking its key failed: ${error instanceof Error ? error.message : String(error)}. Run \`splits auth whoami\` to retry.\n`,
       );
-      return false;
+      return { verified: false, user: null };
     },
   );
   return {
     saved: true,
-    verified,
+    verified: whoami.verified,
+    user: whoami.user,
     workspace: alias,
     replaced,
     orgId: grant.orgId,
@@ -1485,6 +1493,9 @@ accounts.command("update-signers", {
     "its id here. The same id can be attached to any number of accounts. " +
     "Primary use case: adding an external (EOA) key so an agent or automation can operate on the account headlessly " +
     "— passkeys require a biometric 2nd factor that agents cannot provide. " +
+    "A workspace owner can propose any change. An agent that joined as a member rather than an owner " +
+    "(`auth whoami` shows `user.kind: AGENT`, `members list` shows its role) can only propose adding its own EOA signers, " +
+    "with no passkey, removal or threshold change, and an owner signs it. " +
     "The proposal is created immediately. Sign it on the web via the returned signUrl, or with " +
     "'transactions sign <id>' from a local key that is already a signer on the account. " +
     "On a multisig, run 'transactions update-gas-estimation <id>' before the last signature. " +
@@ -1498,7 +1509,7 @@ accounts.command("update-signers", {
     "Updates apply to every active network on the org automatically. " +
     "Use 'accounts signers <address>' to discover existing signer IDs (passkeys and EOAs), and " +
     "`auth signers` to list the EOA ids registered under the acting user. " +
-    "Requires owner-scoped API key.",
+    "Requires an owner-scoped API key, except for an agent that joined as a member adding its own EOA signers.",
   env: authEnv,
   args: z.object({
     account: evmAddress.describe("Subaccount address (0x...)"),
@@ -2458,7 +2469,12 @@ transactions.command("list", {
     "all inbound activity this year on Base: { chainId: 8453, period: 'thisYear', direction: 'inbound' }; " +
     "specific transaction by memo with explicit dates: { memo: 'Q1 payroll', startDate: '2026-01-01T00:00:00Z', endDate: '2026-04-01T00:00:00Z' }; " +
     "look up a transaction by its user-op hash returned from 'transactions sign': { userOpHash: '0x1dfe…dcf' }; " +
-    "look up an on-chain transaction by hash: { transactionHash: '0xabc…def', chainId: 8453 }",
+    "look up an on-chain transaction by hash: { transactionHash: '0xabc…def', chainId: 8453 }. " +
+    "Each row has a dataType and one object with its details. " +
+    "'transaction' rows have transactionData: types, source, timestamps, failureReason, revertReason, usdNetValue, gasPaidBy, recipients and raw per-operation metadata. " +
+    "'merkleTransaction' rows are proposals that run on several networks, such as a signer change. Their top-level chainId, transactionHash and userOpHash are null; read merkleTransactionData.chainTransactions for each network's status and hashes. " +
+    "'assetTransfer' rows have assetTransferData: token address, symbol, decimals, the raw amount in base units, usdValue, from and to. " +
+    "Older API versions return rows without dataType or these objects.",
   env: authEnv,
   options: workspaceOption.extend({
     chainId: z.number().optional().describe("Filter by chain ID"),
@@ -2562,7 +2578,8 @@ transactions.command("list", {
 });
 
 transactions.command("get", {
-  description: "Get details for a specific transaction",
+  description:
+    "Get details for a specific transaction. The item has the same shape as a 'transactions list' row, including dataType and its matching transactionData, merkleTransactionData or assetTransferData object.",
   env: authEnv,
   options: workspaceOption,
   args: z.object({
