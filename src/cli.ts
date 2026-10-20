@@ -2437,7 +2437,12 @@ transactions.command("list", {
     "all inbound activity this year on Base: { chainId: 8453, period: 'thisYear', direction: 'inbound' }; " +
     "specific transaction by memo with explicit dates: { memo: 'Q1 payroll', startDate: '2026-01-01T00:00:00Z', endDate: '2026-04-01T00:00:00Z' }; " +
     "look up a transaction by its user-op hash returned from 'transactions sign': { userOpHash: '0x1dfe…dcf' }; " +
-    "look up an on-chain transaction by hash: { transactionHash: '0xabc…def', chainId: 8453 }",
+    "look up an on-chain transaction by hash: { transactionHash: '0xabc…def', chainId: 8453 }. " +
+    "Each row has a dataType and one object with its details. " +
+    "'transaction' rows have transactionData: types, source, timestamps, failureReason, revertReason, usdNetValue, gasPaidBy, recipients and raw per-operation metadata. " +
+    "'merkleTransaction' rows are proposals that run on several networks, such as a signer change. Their top-level chainId, transactionHash and userOpHash are null; read merkleTransactionData.chainTransactions for each network's status and hashes. " +
+    "'assetTransfer' rows have assetTransferData: token address, symbol, decimals, the raw amount in base units, usdValue, from and to. " +
+    "Older API versions return rows without dataType or these objects.",
   env: authEnv,
   options: workspaceOption.extend({
     chainId: z.number().optional().describe("Filter by chain ID"),
@@ -2541,7 +2546,8 @@ transactions.command("list", {
 });
 
 transactions.command("get", {
-  description: "Get details for a specific transaction",
+  description:
+    "Get details for a specific transaction. The item has the same shape as a 'transactions list' row, including dataType and its matching transactionData, merkleTransactionData or assetTransferData object.",
   env: authEnv,
   options: workspaceOption,
   args: z.object({
