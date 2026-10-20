@@ -3691,7 +3691,7 @@ const automationOutputSchema = z.object({
   destinationAddress: z
     .string()
     .regex(EVM_ADDRESS_RE, "Invalid destination address"),
-});
+}).strict();
 const automationOutputsSchema = z.array(automationOutputSchema);
 
 const parseOutputsOption = (
