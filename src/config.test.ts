@@ -182,6 +182,84 @@ describe("credential precedence", () => {
   });
 });
 
+describe("prod build", () => {
+  const prod = { prodBuild: true };
+
+  beforeEach(async () => {
+    await resetConfig();
+    await login({ orgId: "org-1", orgName: "Acme", apiKey: "sk_acme" });
+    await login({
+      orgId: "org-2",
+      orgName: "Pett",
+      apiKey: "sk_pett",
+      apiUrl: "https://staging.example.com",
+    });
+  });
+
+  it("sends a workspace saved without a URL to production", async () => {
+    const resolved = await config.resolveCredentials({ workspace: "acme" }, prod);
+
+    assert.equal(resolved.apiUrl, config.DEFAULT_API_URL);
+  });
+
+  it("blocks a workspace saved with a non-production URL and names it", async () => {
+    await assert.rejects(
+      config.resolveCredentials({}, prod),
+      /Workspace "pett" was saved with https:\/\/staging\.example\.com, but the published CLI only talks to https:\/\/server\.production\.splits\.org\. Log in again with `splits auth login --name pett`, or remove it with `splits auth logout pett`\./,
+    );
+  });
+
+  it("accepts a workspace saved with the production URL", async () => {
+    await login({
+      orgId: "org-3",
+      orgName: "Prod",
+      apiKey: "sk_prod",
+      apiUrl: config.DEFAULT_API_URL,
+    });
+
+    const resolved = await config.resolveCredentials({ workspace: "prod" }, prod);
+
+    assert.equal(resolved.apiUrl, config.DEFAULT_API_URL);
+  });
+
+  it("sends SPLITS_API_KEY to production whatever SPLITS_API_URL says", async () => {
+    const resolved = await config.resolveCredentials(
+      { SPLITS_API_KEY: "sk_env", SPLITS_API_URL: "https://local.example.com" },
+      prod,
+    );
+
+    assert.equal(resolved.apiUrl, config.DEFAULT_API_URL);
+  });
+
+  it("blocks a pending login saved with a non-production URL", () => {
+    assert.throws(
+      () =>
+        config.resolveApiUrl({
+          envUrl: undefined,
+          saved: {
+            url: "https://staging.example.com",
+            label: "Pending login req-1",
+            fix: "Start a new login with `splits auth login-start`.",
+          },
+          prodBuild: true,
+        }),
+      /Pending login req-1 was saved with https:\/\/staging\.example\.com.*Start a new login/,
+    );
+  });
+
+  it("refuses SPLITS_API_URL in the prod build only", () => {
+    assert.throws(
+      () => config.assertNoApiUrlEnv("https://local.example.com", true),
+      /SPLITS_API_URL is set, but the published CLI only talks to https:\/\/server\.production\.splits\.org/,
+    );
+    assert.doesNotThrow(() => config.assertNoApiUrlEnv("", true));
+    assert.doesNotThrow(() => config.assertNoApiUrlEnv(undefined, true));
+    assert.doesNotThrow(() =>
+      config.assertNoApiUrlEnv("https://local.example.com", false),
+    );
+  });
+});
+
 describe("auth login", () => {
   beforeEach(resetConfig);
 

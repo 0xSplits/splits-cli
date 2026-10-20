@@ -8,6 +8,8 @@ pnpm install
 
 ## Development
 
+The published package only talks to the production API. When you run the CLI from source (`pnpm dev`, or `tsx src/cli.ts`), it keeps the URL overrides: `SPLITS_API_URL`, `auth login --api-url` and the URL saved with each workspace.
+
 You can run locally via `tsx`
 ```sh
 export SPLITS_API_KEY="<your_api_key>"
@@ -40,7 +42,8 @@ Or add it as a server in your Claude settings.json
 ## Build
 
 ```sh
-pnpm build
+pnpm build        # non-prod build: keeps the URL overrides
+pnpm build:prod   # prod build: production API only; prepublishOnly runs this
 ```
 
 ## Release

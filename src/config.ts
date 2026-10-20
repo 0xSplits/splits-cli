@@ -11,6 +11,7 @@ import { join } from "node:path";
 
 import { z } from "incur";
 
+import { IS_PROD_BUILD } from "./build-target.js";
 import { withLock } from "./lock.js";
 
 const CONFIG_DIR = join(homedir(), ".splits");
@@ -404,8 +405,41 @@ export type ResolvedCredentials = {
 const nonEmpty = (value: string | undefined): string | undefined =>
   value !== undefined && value.length > 0 ? value : undefined;
 
+export const assertNoApiUrlEnv = (
+  value: string | undefined,
+  prodBuild = IS_PROD_BUILD,
+): void => {
+  if (prodBuild && nonEmpty(value) !== undefined) {
+    throw new Error(
+      `SPLITS_API_URL is set, but the published CLI only talks to ${DEFAULT_API_URL}. ` +
+        "Unset SPLITS_API_URL, or run the CLI from source (see CONTRIBUTING.md) for local, testing or staging work.",
+    );
+  }
+};
+
+type SavedApiUrl = { url: string; label: string; fix: string };
+
+export const resolveApiUrl = ({
+  envUrl,
+  saved,
+  prodBuild = IS_PROD_BUILD,
+}: {
+  envUrl: string | undefined;
+  saved: SavedApiUrl | null;
+  prodBuild?: boolean;
+}): string => {
+  if (!prodBuild) return nonEmpty(envUrl) ?? saved?.url ?? DEFAULT_API_URL;
+  if (saved !== null && saved.url !== DEFAULT_API_URL) {
+    throw new Error(
+      `${saved.label} was saved with ${saved.url}, but the published CLI only talks to ${DEFAULT_API_URL}. ${saved.fix}`,
+    );
+  }
+  return DEFAULT_API_URL;
+};
+
 export const resolveCredentials = async (
   source: CredentialSource,
+  { prodBuild = IS_PROD_BUILD }: { prodBuild?: boolean } = {},
 ): Promise<ResolvedCredentials> => {
   const requested =
     nonEmpty(source.workspace) ?? nonEmpty(source.SPLITS_WORKSPACE);
@@ -420,7 +454,11 @@ export const resolveCredentials = async (
     return {
       apiKey: envKey,
       apiKeySource: "env",
-      apiUrl: nonEmpty(source.SPLITS_API_URL) ?? DEFAULT_API_URL,
+      apiUrl: resolveApiUrl({
+        envUrl: source.SPLITS_API_URL,
+        saved: null,
+        prodBuild,
+      }),
       workspace: null,
     };
   }
@@ -435,8 +473,18 @@ export const resolveCredentials = async (
   return {
     apiKey: workspace?.apiKey ?? null,
     apiKeySource: workspace ? "keystore" : null,
-    apiUrl:
-      nonEmpty(source.SPLITS_API_URL) ?? workspace?.apiUrl ?? DEFAULT_API_URL,
+    apiUrl: resolveApiUrl({
+      envUrl: source.SPLITS_API_URL,
+      saved:
+        workspace === undefined || workspace.apiUrl === null
+          ? null
+          : {
+              url: workspace.apiUrl,
+              label: `Workspace "${alias}"`,
+              fix: `Log in again with \`splits auth login --name ${alias}\`, or remove it with \`splits auth logout ${alias}\`.`,
+            },
+      prodBuild,
+    }),
     workspace: workspace ? alias : null,
   };
 };

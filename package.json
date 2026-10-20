@@ -12,8 +12,9 @@
   "scripts": {
     "dev": "tsx src/cli.ts",
     "build": "tsc",
+    "build:prod": "tsc && node scripts/mark-prod-build.mjs",
     "test": "tsx --test src/*.test.ts",
-    "prepublishOnly": "pnpm build",
+    "prepublishOnly": "pnpm build:prod",
     "release": "npm version patch && pnpm publish --access public"
   },
   "dependencies": {
