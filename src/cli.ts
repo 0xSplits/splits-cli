@@ -3799,11 +3799,16 @@ automations.command("create", {
     }
 
     const outputPercent = outputs.reduce((sum, o) => sum + o.percent, 0);
+    if (outputPercent > 100) {
+      throw new Error(
+        `The output percents add up to ${outputPercent}, more than 100.`,
+      );
+    }
     const passThroughPercent =
       options.forwarder !== undefined
         ? 100
         : (options.passThroughPercent ?? 100 - outputPercent);
-    if (passThroughPercent < 0 || passThroughPercent + outputPercent !== 100) {
+    if (passThroughPercent + outputPercent !== 100) {
       throw new Error(
         `The pass-through percent (${passThroughPercent}) plus the output percents (${outputPercent}) must equal 100.`,
       );
