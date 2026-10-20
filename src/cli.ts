@@ -1117,8 +1117,8 @@ const WORKSPACE_OWNER_QUESTION =
   "no browser, and recoveryEmail is the email of the person who can recover it). Never choose for them.";
 
 const OWNER_CHOICE_LABEL_BY_OWNER = {
-  person: "Me, approving in the browser",
-  agent: "The agent, with a recovery email",
+  person: "Approve it myself",
+  agent: "Let the agent own it",
 } as const;
 
 type WorkspaceOwner = keyof typeof OWNER_CHOICE_LABEL_BY_OWNER;
@@ -1130,26 +1130,46 @@ type WorkspaceOwnerChoice =
 
 const workspaceOwners = Object.keys(OWNER_CHOICE_LABEL_BY_OWNER) as WorkspaceOwner[];
 
-const isWorkspaceOwner = (value: unknown): value is WorkspaceOwner =>
-  workspaceOwners.some((owner) => owner === value);
-
 const nonEmptyString = (value: unknown): string | undefined =>
   typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
 
-const askRecoveryEmail = async (name: string): Promise<string | undefined> => {
+const unanswered = (
+  action: "decline" | "cancel",
+): WorkspaceOwnerChoice => ({
+  owner: null,
+  reason: action === "decline" ? "declined" : "dismissed",
+});
+
+const askRecoveryEmail = async ({
+  name,
+  recoveryEmail,
+}: {
+  name: string;
+  recoveryEmail: string | undefined;
+}): Promise<WorkspaceOwnerChoice> => {
   const result = await askPerson({
-    message: `Which email can recover the workspace "${name}"? That person becomes an owner when they log in to Splits.`,
+    message:
+      `Which email can recover "${name}"?\n\n` +
+      "Whoever logs in to Splits with this email becomes an owner of the workspace. " +
+      "Splits sends nothing to it, so check it is right.",
     requestedSchema: {
       type: "object",
       properties: {
-        recoveryEmail: { type: "string", format: "email", title: "Recovery email" },
+        recoveryEmail: {
+          type: "string",
+          format: "email",
+          title: "Recovery email",
+          ...(recoveryEmail === undefined ? {} : { default: recoveryEmail }),
+        },
       },
       required: ["recoveryEmail"],
     },
   });
-  return result.action === "accept"
-    ? nonEmptyString(result.content?.recoveryEmail)
-    : undefined;
+  if (result.action !== "accept") return unanswered(result.action);
+  const email = nonEmptyString(result.content?.recoveryEmail);
+  return email === undefined
+    ? { owner: null, reason: "dismissed" }
+    : { owner: "agent", recoveryEmail: email };
 };
 
 const askWorkspaceOwner = async ({
@@ -1162,37 +1182,29 @@ const askWorkspaceOwner = async ({
   recoveryEmail: string | undefined;
 }): Promise<WorkspaceOwnerChoice> => {
   const result = await askPerson({
-    message: `Who should own the new Splits workspace "${name}"?`,
+    message:
+      `How should the workspace "${name}" be created?\n\n` +
+      "• Approve it myself: you log in to Splits in the browser and become its owner.\n" +
+      "• Let the agent own it: created now, with no login. You give an email that can recover it later.",
     requestedSchema: {
       type: "object",
       properties: {
         owner: {
           type: "string",
-          title: "Owner",
+          title: "Choice",
           enum: workspaceOwners,
           enumNames: workspaceOwners.map((o) => OWNER_CHOICE_LABEL_BY_OWNER[o]),
           ...(owner === undefined ? {} : { default: owner }),
-        },
-        recoveryEmail: {
-          type: "string",
-          format: "email",
-          title: "Recovery email (only when the agent owns it)",
-          ...(recoveryEmail === undefined ? {} : { default: recoveryEmail }),
         },
       },
       required: ["owner"],
     },
   });
-  if (result.action === "decline") return { owner: null, reason: "declined" };
-  if (result.action === "cancel") return { owner: null, reason: "dismissed" };
+  if (result.action !== "accept") return unanswered(result.action);
   const chosen = result.content?.owner;
   if (chosen === "person") return { owner: "person" };
   if (chosen !== "agent") return { owner: null, reason: "dismissed" };
-  const email =
-    nonEmptyString(result.content?.recoveryEmail) ?? (await askRecoveryEmail(name));
-  return email === undefined
-    ? { owner: null, reason: "dismissed" }
-    : { owner: "agent", recoveryEmail: email };
+  return askRecoveryEmail({ name, recoveryEmail });
 };
 
 const resolveWorkspaceOwner = async ({
