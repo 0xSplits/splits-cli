@@ -528,6 +528,12 @@ const runAutonomousCreate = async ({
     clientName,
     recoveryEmail,
     workspace,
+  }).catch((error: unknown) => {
+    if (freshPrivateKey === null) throw error;
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)} The new key ${account.address} is saved. ` +
+        `Retry with --key ${account.address}: if the workspace was created, the retry returns it instead of creating another.`,
+    );
   });
   const saved = await saveApprovedLogin({
     grant,
@@ -1121,13 +1127,19 @@ workspace.command("create", {
     "gets a new one. Off-ramp and paid plans need a person, so they stay unavailable until the person joins.",
   env: authEnv,
   options: browserLoginOptions.omit({ name: true }).extend({
+    key: browserLoginOptions.shape.key.describe(
+      "Saved local key that proves this agent and becomes the treasury signer. Without it, a new key is used: " +
+        "in a browser login it is saved only when the person creates a workspace, and with --recovery-email it " +
+        "is saved before the call.",
+    ),
     name: z
       .string()
       .trim()
       .min(1)
       .max(255)
       .describe(
-        "Workspace name to prefill. The local workspace alias is derived from the name the person approves.",
+        "Workspace name to prefill. The local workspace alias is derived from the name the person approves, " +
+          "or from this name with --recovery-email.",
       ),
     chainIds: z
       .string()
