@@ -120,7 +120,7 @@ export const createAutonomousWorkspace = async ({
   }).catch((error: unknown) => {
     if (error instanceof SplitsApiError && error.status === 404) {
       throw new Error(
-        `${apiUrl} does not support creating a workspace without a browser yet. Run \`splits workspace create\` without --recovery-email.`,
+        `${apiUrl} does not support creating a workspace without a browser yet. Use \`splits workspace create\`, which the person approves in the browser.`,
       );
     }
     throw error;
