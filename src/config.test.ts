@@ -247,16 +247,13 @@ describe("prod build", () => {
     );
   });
 
-  it("refuses SPLITS_API_URL in the prod build only", () => {
-    assert.throws(
-      () => config.assertNoApiUrlEnv("https://local.example.com", true),
-      /SPLITS_API_URL is set, but the published CLI only talks to https:\/\/server\.production\.splits\.org/,
+  it("ignores SPLITS_API_URL for a saved workspace", async () => {
+    const resolved = await config.resolveCredentials(
+      { workspace: "acme", SPLITS_API_URL: "https://local.example.com" },
+      prod,
     );
-    assert.doesNotThrow(() => config.assertNoApiUrlEnv("", true));
-    assert.doesNotThrow(() => config.assertNoApiUrlEnv(undefined, true));
-    assert.doesNotThrow(() =>
-      config.assertNoApiUrlEnv("https://local.example.com", false),
-    );
+
+    assert.equal(resolved.apiUrl, config.DEFAULT_API_URL);
   });
 });
 

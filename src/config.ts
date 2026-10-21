@@ -405,18 +405,6 @@ export type ResolvedCredentials = {
 const nonEmpty = (value: string | undefined): string | undefined =>
   value !== undefined && value.length > 0 ? value : undefined;
 
-export const assertNoApiUrlEnv = (
-  value: string | undefined,
-  prodBuild = IS_PROD_BUILD,
-): void => {
-  if (prodBuild && nonEmpty(value) !== undefined) {
-    throw new Error(
-      `SPLITS_API_URL is set, but the published CLI only talks to ${DEFAULT_API_URL}. ` +
-        "Unset SPLITS_API_URL, or run the CLI from source (see CONTRIBUTING.md) for local, testing or staging work.",
-    );
-  }
-};
-
 type SavedApiUrl = { url: string; label: string; fix: string };
 
 export const resolveApiUrl = ({

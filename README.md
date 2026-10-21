@@ -503,7 +503,7 @@ Every tool that calls the API takes an optional `workspace` argument, so one MCP
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `SPLITS_API_KEY` | No\* | API key from [Splits Settings](https://app.splits.org/settings/team/api-keys/). Takes precedence over `splits auth login`; saved workspaces are not used while it is set. |
-| `SPLITS_API_URL` | No | Not supported by the published CLI, which only talks to `https://server.production.splits.org`; setting it is an error. A workspace saved with another URL by an older version is refused until you log in again. To work against a local, testing or staging API, run the CLI from source (see [CONTRIBUTING.md](CONTRIBUTING.md)). |
+| `SPLITS_API_URL` | No | Ignored by the published CLI, which only talks to `https://server.production.splits.org`. A workspace saved with another URL by an older version is refused until you log in again. To work against a local, testing or staging API, run the CLI from source (see [CONTRIBUTING.md](CONTRIBUTING.md)). |
 | `SPLITS_WORKSPACE` | No | Workspace alias to use instead of the active one. `--workspace` takes precedence over it. |
 | `SPLITS_MCP_MODE` | No | Set to `1` when running as an MCP server. Refuses flag-based secrets (`--api-key`, `--private-key`) so secrets don't appear in tool-call transcripts. |
 

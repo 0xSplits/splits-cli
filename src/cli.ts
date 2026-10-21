@@ -20,7 +20,6 @@ import {
 } from "./agent-login.js";
 import { IS_PROD_BUILD } from "./build-target.js";
 import {
-  assertNoApiUrlEnv,
   assertWorkspaceAlias,
   CONFIG_FILE_PATH,
   type ResolvedCredentials,
@@ -3959,13 +3958,6 @@ org.command("create", {
 });
 
 cli.command(org);
-
-try {
-  assertNoApiUrlEnv(process.env.SPLITS_API_URL);
-} catch (error) {
-  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-  process.exit(1);
-}
 
 cli.serve();
 export default cli;
