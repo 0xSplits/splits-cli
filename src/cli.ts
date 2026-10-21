@@ -1803,7 +1803,7 @@ reports.command("generate", {
       .string()
       .optional()
       .describe(
-        "Comma-separated chain ids (e.g. '8453,1'). Omit for all chains. All reports except realized-gains and pnl.",
+        "Comma-separated chain ids (e.g. '8453,1'). Omit for all chains. All reports except realized-gains.",
       ),
     tokens: z
       .string()
