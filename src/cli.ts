@@ -507,6 +507,28 @@ const runBrowserLogin = async ({
   return { ...saved, signerAddress: account.address };
 };
 
+const agentOwnedNext = ({
+  created,
+  signerAddress,
+}: {
+  created: AgentLoginGrant["created"];
+  signerAddress: string;
+}): string =>
+  [
+    created === null
+      ? null
+      : `Tell the person the recovery email is ${created.recoveryEmail} and ask them to check it, then to log in ` +
+        "to Splits with it: that confirms the address and makes them an owner. Splits never checks it, and a " +
+        "wrong address gives a stranger control of the root account.",
+    `The local key ${signerAddress} in ${CONFIG_FILE_PATH} is the only signer of the treasury. Never print, ` +
+      "paste or move it. If it is lost, only the recovery email can recover the funds.",
+    created === null
+      ? null
+      : "Suggest that the person logs in with the recovery email before anyone deposits funds.",
+  ]
+    .filter((line) => line !== null)
+    .join(" ");
+
 const runAutonomousCreate = async ({
   env,
   apiUrl,
@@ -550,14 +572,20 @@ const runAutonomousCreate = async ({
     signerAddress: account.address,
     freshPrivateKey: null,
   });
-  if (!mcpMode() && saved.diagram !== null) {
-    process.stderr.write(`${saved.diagram}\n`);
+  const next = agentOwnedNext({
+    created: grant.created,
+    signerAddress: account.address,
+  });
+  if (!mcpMode()) {
+    if (saved.diagram !== null) process.stderr.write(`${saved.diagram}\n`);
+    process.stderr.write(`Warning: ${next}\n`);
   }
   warnIfEnvKeySet(env);
   return {
     ...saved,
     keySaved: freshPrivateKey !== null,
     signerAddress: account.address,
+    next,
   };
 };
 
@@ -1179,7 +1207,8 @@ workspace.command("create-agent-owned", {
     "only signer of the treasury, the deposit address on every chosen chain. A new local key is saved before " +
     "the call. A key creates one workspace: calling again with the same key returns a new API key for that " +
     "workspace. The API key is saved as a new active workspace and never appears in the output. Off-ramp and " +
-    "paid plans stay unavailable until a person joins.",
+    "paid plans stay unavailable until a person joins. The local key is the money: never print, paste or move " +
+    "it. Follow the `next` field of the result, and relay its warning to the person.",
   env: authEnv,
   options: browserLoginOptions.omit({ name: true }).merge(
     workspaceInputOptions.extend({
