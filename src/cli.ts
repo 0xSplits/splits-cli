@@ -517,9 +517,9 @@ const agentOwnedNext = ({
   [
     created === null
       ? null
-      : `Tell the person the recovery email is ${created.recoveryEmail} and ask them to check it, then to log in ` +
-        "to Splits with it: that confirms the address and makes them an owner. Splits never checks it, and a " +
-        "wrong address gives a stranger control of the root account.",
+      : `Tell the person the recovery email is ${created.recoveryEmail} and ask them to check it. Splits never ` +
+        "checks it, and a wrong address gives a stranger control of the root account. Logging in to Splits " +
+        "with it makes them an owner of the workspace.",
     `The local key ${signerAddress} in ${CONFIG_FILE_PATH} is the only signer of the treasury. Never print, ` +
       "paste or move it. If it is lost, only the recovery email can recover the funds.",
     created === null
