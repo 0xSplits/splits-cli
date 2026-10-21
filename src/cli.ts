@@ -2384,7 +2384,7 @@ categories.command("create", {
 
 categories.command("update", {
   description:
-    "Rename a category, change its account type, or set its code. Pass at least one. " +
+    "Rename a category, change its account type, or set or clear its code. Pass at least one. " +
     "Renaming keeps every rule and override pointing at it.",
   env: authEnv,
   args: z.object({
@@ -2397,12 +2397,24 @@ categories.command("update", {
     label: z.string().min(1).optional().describe("New name"),
     accountType: z.enum(ACCOUNT_TYPES).optional().describe("New account type"),
     code: z.string().optional().describe("New account number"),
+    clearCode: z
+      .boolean()
+      .default(false)
+      .describe("Remove the category's account number"),
   }),
   async run({ env: processEnv, args, options }) {
     const env = await withWorkspace(processEnv, options);
-    if (!options.label && !options.accountType && options.code === undefined) {
+    if (options.clearCode && options.code !== undefined) {
+      throw new Error("Pass --code or --clear-code, not both.");
+    }
+    if (
+      !options.label &&
+      !options.accountType &&
+      options.code === undefined &&
+      !options.clearCode
+    ) {
       throw new Error(
-        "Pass at least one of --label, --account-type, or --code.",
+        "Pass at least one of --label, --account-type, --code, or --clear-code.",
       );
     }
     return apiRequest(env, `/accounting/categories/${args.categoryId}`, {
@@ -2410,7 +2422,8 @@ categories.command("update", {
       body: {
         label: options.label,
         accountType: options.accountType,
-        code: options.code,
+        // The API clears a code on null.
+        code: options.clearCode ? null : options.code,
       },
     });
   },
@@ -2619,6 +2632,9 @@ const writeCategoryAssertions = (
   env: AuthEnv,
   assertions: Record<string, unknown>[],
 ) => {
+  if (assertions.length === 0) {
+    throw new Error("Pass at least one id in --target-ids.");
+  }
   if (assertions.length > CATEGORY_ASSERTION_BULK_LIMIT) {
     throw new Error(
       `A bulk write is limited to ${CATEGORY_ASSERTION_BULK_LIMIT} assertions; got ${assertions.length}.`,
@@ -2634,12 +2650,6 @@ const writeCategoryAssertions = (
         body: { assertions },
       });
 };
-
-const splitIds = (ids: string) =>
-  ids
-    .split(",")
-    .map((id) => id.trim())
-    .filter(Boolean);
 
 categorize.command("set", {
   description:
@@ -2657,7 +2667,7 @@ categorize.command("set", {
     const env = await withWorkspace(processEnv, options);
     return writeCategoryAssertions(
       env,
-      splitIds(options.targetIds).map((targetId) => ({
+      splitCsv(options.targetIds).map((targetId) => ({
         kind: "set",
         targetKind: options.targetKind,
         targetId,
@@ -2676,7 +2686,7 @@ categorize.command("revoke", {
     const env = await withWorkspace(processEnv, options);
     return writeCategoryAssertions(
       env,
-      splitIds(options.targetIds).map((targetId) => ({
+      splitCsv(options.targetIds).map((targetId) => ({
         kind: "revoke",
         targetKind: options.targetKind,
         targetId,

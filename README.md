@@ -377,6 +377,7 @@ splits accounting assertions bulk --file ./seeds.json
 splits accounting categories list --include-archived
 splits accounting categories create --label "Software & services" --account-type expense --code 6100
 splits accounting categories update <categoryId> --label "Software"
+splits accounting categories update <categoryId> --clear-code
 splits accounting categories archive <categoryId>
 
 # Rules categorize every past and future match; the most specific rule wins
