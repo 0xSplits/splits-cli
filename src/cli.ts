@@ -1194,7 +1194,7 @@ const askWorkspaceOwner = async ({
           title: "Choice",
           enum: workspaceOwners,
           enumNames: workspaceOwners.map((o) => OWNER_CHOICE_LABEL_BY_OWNER[o]),
-          ...(owner === undefined ? {} : { default: owner }),
+          default: owner ?? "person",
         },
       },
       required: ["owner"],
