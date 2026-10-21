@@ -42,7 +42,6 @@ import {
 import { downloadToFile, httpRequest, SplitsApiError } from "./http.js";
 import { PERIODS, resolvePeriod, type Period } from "./periods.js";
 import { bytes32Hash, evmAddress, transactionId } from "./schemas.js";
-import { askPerson, canAskPerson, captureMcpToolCalls } from "./mcp-context.js";
 import { signMessageLocally, signTransactionLocally } from "./signing.js";
 
 const AMOUNT_REGEX = /^(0|[1-9]\d*)(\.\d+)?$/;
@@ -1111,238 +1110,112 @@ const workspace = Cli.create("workspace", {
   description: "Create Splits workspaces.",
 });
 
-const WORKSPACE_OWNER_QUESTION =
-  "Ask the person who should own the new workspace, then call again with their answer in owner: " +
-  "`person` (they approve it in the browser and their login email recovers it) or `agent` (you own it, " +
-  "no browser, and recoveryEmail is the email of the person who can recover it). Never choose for them.";
-
-const OWNER_CHOICE_LABEL_BY_OWNER = {
-  person: "Approve it myself",
-  agent: "Let the agent own it",
-} as const;
-
-type WorkspaceOwner = keyof typeof OWNER_CHOICE_LABEL_BY_OWNER;
-
-type WorkspaceOwnerChoice =
-  | { owner: "person" }
-  | { owner: "agent"; recoveryEmail: string }
-  | { owner: null; reason: "declined" | "dismissed" };
-
-const workspaceOwners = Object.keys(OWNER_CHOICE_LABEL_BY_OWNER) as WorkspaceOwner[];
-
-const nonEmptyString = (value: unknown): string | undefined =>
-  typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
-
-const unanswered = (
-  action: "decline" | "cancel",
-): WorkspaceOwnerChoice => ({
-  owner: null,
-  reason: action === "decline" ? "declined" : "dismissed",
+const workspaceInputOptions = z.object({
+  name: z.string().trim().min(1).max(255),
+  chainIds: z
+    .string()
+    .optional()
+    .describe(
+      "Comma-separated chain ids to prefill (e.g. '8453,1'). Defaults to the chains a new workspace gets in the app.",
+    ),
 });
 
-const askRecoveryEmail = async ({
-  name,
-  recoveryEmail,
-}: {
-  name: string;
-  recoveryEmail: string | undefined;
-}): Promise<WorkspaceOwnerChoice> => {
-  const result = await askPerson({
-    message:
-      `Which email can recover "${name}"?\n\n` +
-      "Whoever logs in to Splits with this email becomes an owner of the workspace. " +
-      "Splits sends nothing to it, so check it is right.",
-    requestedSchema: {
-      type: "object",
-      properties: {
-        recoveryEmail: {
-          type: "string",
-          format: "email",
-          title: "Recovery email",
-          ...(recoveryEmail === undefined ? {} : { default: recoveryEmail }),
-        },
-      },
-      required: ["recoveryEmail"],
-    },
-  });
-  if (result.action !== "accept") return unanswered(result.action);
-  const email = nonEmptyString(result.content?.recoveryEmail);
-  return email === undefined
-    ? { owner: null, reason: "dismissed" }
-    : { owner: "agent", recoveryEmail: email };
-};
-
-const askWorkspaceOwner = async ({
-  name,
-  owner,
-  recoveryEmail,
-}: {
-  name: string;
-  owner: WorkspaceOwner | undefined;
-  recoveryEmail: string | undefined;
-}): Promise<WorkspaceOwnerChoice> => {
-  const result = await askPerson({
-    message:
-      `How should the workspace "${name}" be created?\n\n` +
-      "• Approve it myself: you log in to Splits in the browser and become its owner.\n" +
-      "• Let the agent own it: created now, with no login. You give an email that can recover it later.",
-    requestedSchema: {
-      type: "object",
-      properties: {
-        owner: {
-          type: "string",
-          title: "Choice",
-          enum: workspaceOwners,
-          enumNames: workspaceOwners.map((o) => OWNER_CHOICE_LABEL_BY_OWNER[o]),
-          default: owner ?? "person",
-        },
-      },
-      required: ["owner"],
-    },
-  });
-  if (result.action !== "accept") return unanswered(result.action);
-  const chosen = result.content?.owner;
-  if (chosen === "person") return { owner: "person" };
-  if (chosen !== "agent") return { owner: null, reason: "dismissed" };
-  return askRecoveryEmail({ name, recoveryEmail });
-};
-
-const resolveWorkspaceOwner = async ({
-  name,
-  owner,
-  recoveryEmail,
-}: {
-  name: string;
-  owner: WorkspaceOwner | undefined;
-  recoveryEmail: string | undefined;
-}): Promise<WorkspaceOwnerChoice> => {
-  if (mcpMode() && canAskPerson()) {
-    const asked = await askWorkspaceOwner({ name, owner, recoveryEmail });
-    if (asked.owner !== null || asked.reason === "declined" || owner === undefined) {
-      return asked;
-    }
-  }
-  const decided = owner ?? (mcpMode() ? undefined : recoveryEmail ? "agent" : "person");
-  if (decided === undefined) throw new Error(WORKSPACE_OWNER_QUESTION);
-  if (decided === "person") return { owner: "person" };
-  if (recoveryEmail === undefined) {
-    throw new Error(
-      "An agent-owned workspace needs recoveryEmail. Ask the person which email can recover it; never make one up.",
-    );
-  }
-  return { owner: "agent", recoveryEmail };
-};
+const toWorkspaceInput = (
+  options: z.infer<typeof workspaceInputOptions>,
+): CreateWorkspacePrefill => ({
+  name: options.name,
+  chainIds:
+    options.chainIds === undefined ? undefined : parseChainIds(options.chainIds),
+});
 
 workspace.command("create", {
   description:
-    "Create a new Splits workspace. It has one of two owners, and the person chooses which. " +
-    "In MCP clients that can show a form, this tool asks the person itself: call it without asking them first. " +
-    "If it returns `cancelled` because the form was closed or could not be shown, ask the person in the chat " +
-    "and call again with their answer in owner. In other clients, ask the person and pass owner. " +
-    "With owner `person`, the person approves in the browser: the approval page opens on its create tab, " +
-    "prefilled with the name and chains; the person logs in, can change them, and approves, and becomes the " +
-    "owner. The person must enter a code on the page. Outside MCP the command prints the code, waits up to " +
-    "10 minutes for the approval and prints a diagram of the accounts. Under MCP it returns the approval URL " +
-    "and the code without waiting: show both to the person, then call `auth login-status` right away, which " +
-    "waits for the approval, saves the workspace and returns the diagram. The person can also connect an " +
-    "existing workspace instead. " +
-    "With owner `agent`, no person approves: the workspace is created at once, this agent is its only owner, " +
-    "and its API key has every scope. The recovery email is the root signer, and the person at that email " +
-    "becomes an owner when they log in to Splits with it; Splits sends it no email and does not check it. " +
-    "A new local key is saved before the call. A key creates one workspace: calling again with the same key " +
-    "returns a new API key for that workspace. Off-ramp and paid plans need a person, so they stay " +
-    "unavailable until the person joins. " +
-    "Either way two accounts are created, at the same address on every chosen chain: the root, which owns " +
-    "the treasury and is recovered by the email; and the treasury, whose only signer is this agent's local " +
-    "key, and which is the workspace's deposit address. The API key is saved as a new active workspace and " +
-    "never appears in the output. " +
+    "Create a new Splits workspace that the person owns and approves in the browser. Use this whenever " +
+    "a person is in the conversation. Opens the approval page " +
+    "on its create tab, prefilled with the name and chains; the person logs in, can change them, and " +
+    "approves. The person becomes the workspace's owner. Two accounts are created, at the same " +
+    "address on every chosen chain: the root, whose only signer is the person's login email and which " +
+    "owns the treasury, so the person can always recover it; and the treasury, whose only signer is " +
+    "this agent's local key, and which is the workspace's deposit address. " +
+    "The person can also connect an existing workspace instead. On approval the API key is saved as a " +
+    "new workspace and made active; the key never appears in the output. " +
+    "The person must enter a code on the page. Outside MCP the command prints the code, waits up to " +
+    "10 minutes for the approval and prints a diagram of the accounts. " +
+    "Under MCP it returns the approval URL and the code without waiting: show both to the person, then call " +
+    "`auth login-status` right away, which waits for the approval, saves the workspace and returns the diagram. " +
     "Use this rather than `org create` when this agent will work in the new workspace: `org create` only " +
-    "emails the person a setup link and gives this agent no API key and no signer.",
+    "emails the person a setup link and gives this agent no API key and no signer. " +
+    "For a workspace this agent owns with no approval, see `workspace create-agent-owned`.",
   env: authEnv,
-  options: browserLoginOptions.omit({ name: true }).extend({
-    key: browserLoginOptions.shape.key.describe(
-      "Saved local key that proves this agent and becomes the treasury signer. Without it, a new key is used: " +
-        "with owner `person` it is saved only when the person creates a workspace, and with owner `agent` it " +
-        "is saved before the call.",
-    ),
-    name: z
-      .string()
-      .trim()
-      .min(1)
-      .max(255)
-      .describe(
-        "Workspace name to prefill. The local workspace alias is derived from the name the person approves, " +
-          "or from this name when the agent owns the workspace.",
+  options: browserLoginOptions.omit({ name: true }).merge(
+    workspaceInputOptions.extend({
+      name: workspaceInputOptions.shape.name.describe(
+        "Workspace name to prefill. The local workspace alias is derived from the name the person approves.",
       ),
-    chainIds: z
-      .string()
-      .optional()
-      .describe(
-        "Comma-separated chain ids to prefill (e.g. '8453,1'). Defaults to the chains a new workspace gets in the app.",
-      ),
-    owner: z
-      .enum(["person", "agent"])
-      .optional()
-      .describe(
-        "Who owns the workspace, as the person chose it in the chat. Never choose for them. Where the client " +
-          "shows a form, the person's answer in the form wins, and this is used only when the form was closed " +
-          "without an answer or could not be shown. Outside MCP it defaults to `agent` with --recovery-email " +
-          "and to `person` without it.",
-      ),
-    recoveryEmail: z
-      .string()
-      .trim()
-      .email()
-      .optional()
-      .describe(
-        "Only with owner `agent`: the email of the person who can recover the workspace, as they gave it. " +
-          "It becomes the root signer, and that person joins as an owner when they log in to Splits.",
-      ),
-  }),
+    }),
+  ),
   async run({ env, options }) {
-    const apiUrl = resolveLoginApiUrl(env, options.apiUrl);
-    const createWorkspace = {
-      name: options.name,
-      chainIds:
-        options.chainIds === undefined
-          ? undefined
-          : parseChainIds(options.chainIds),
-    };
-    const choice = await resolveWorkspaceOwner({
-      name: options.name,
-      owner: options.owner,
-      recoveryEmail: options.recoveryEmail,
-    });
-    if (choice.owner === null) {
-      return {
-        status: "cancelled",
-        message:
-          choice.reason === "declined"
-            ? "The person declined. No workspace was created."
-            : "The form asking who should own the workspace was closed without an answer, or this client " +
-              "could not show it. No workspace was created. " +
-              WORKSPACE_OWNER_QUESTION,
-      };
-    }
-    if (choice.owner === "agent") {
-      return runAutonomousCreate({
-        env,
-        apiUrl,
-        key: options.key,
-        clientName: options.clientName,
-        recoveryEmail: choice.recoveryEmail,
-        workspace: createWorkspace,
-      });
-    }
     const login = {
-      apiUrl,
+      apiUrl: resolveLoginApiUrl(env, options.apiUrl),
       key: options.key,
       clientName: options.clientName,
       name: undefined,
-      createWorkspace,
+      createWorkspace: toWorkspaceInput(options),
     };
     if (mcpMode()) return startPendingLogin(login);
     return runBrowserLogin({ env, ...login });
+  },
+});
+
+workspace.command("create-agent-owned", {
+  description:
+    "Create a new Splits workspace that this agent owns. No browser, no person approves: it is created at " +
+    "once, this agent is its only owner, and its API key has every scope. Use it only when the person " +
+    "explicitly asked for a workspace the agent owns, or when no person can approve. Never choose it because " +
+    "it is faster; when a person is in the conversation and did not ask for it, use `workspace create`. " +
+    "recoveryEmail is required and must be the email the person gave; never make one up. It is the only " +
+    "signer of the root account, which owns the treasury, and whoever logs in to Splits with it becomes an " +
+    "owner of the workspace. Splits sends it no email and does not verify it. This agent's local key is the " +
+    "only signer of the treasury, the deposit address on every chosen chain. A new local key is saved before " +
+    "the call. A key creates one workspace: calling again with the same key returns a new API key for that " +
+    "workspace. The API key is saved as a new active workspace and never appears in the output. Off-ramp and " +
+    "paid plans stay unavailable until a person joins.",
+  env: authEnv,
+  options: browserLoginOptions.omit({ name: true }).merge(
+    workspaceInputOptions.extend({
+      name: workspaceInputOptions.shape.name.describe(
+        "Workspace name. The local workspace alias is derived from it.",
+      ),
+      chainIds: workspaceInputOptions.shape.chainIds.describe(
+        "Comma-separated chain ids (e.g. '8453,1'). Defaults to the chains a new workspace gets in the app.",
+      ),
+      key: browserLoginOptions.shape.key.describe(
+        "Saved local key that becomes the treasury signer. Without it, a new key is saved before the call. " +
+          "Pass the key that created a workspace to get a new API key for it.",
+      ),
+      clientName: browserLoginOptions.shape.clientName.describe(
+        "The name of the app the person is using to talk to you (for example `Claude Code`). " +
+          "It names the treasury signer and the API key.",
+      ),
+      recoveryEmail: z
+        .string()
+        .trim()
+        .email()
+        .describe(
+          "Email of the person who can recover the workspace, exactly as they gave it. Never make one up. " +
+            "It becomes the root signer, and whoever logs in to Splits with it becomes an owner.",
+        ),
+    }),
+  ),
+  async run({ env, options }) {
+    return runAutonomousCreate({
+      env,
+      apiUrl: resolveLoginApiUrl(env, options.apiUrl),
+      key: options.key,
+      clientName: options.clientName,
+      recoveryEmail: options.recoveryEmail,
+      workspace: toWorkspaceInput(options),
+    });
   },
 });
 
@@ -4174,7 +4047,6 @@ org.command("create", {
 
 cli.command(org);
 
-if (process.argv.includes("--mcp")) await captureMcpToolCalls();
 
 cli.serve();
 export default cli;
