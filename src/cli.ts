@@ -508,26 +508,18 @@ const runBrowserLogin = async ({
 };
 
 const agentOwnedNext = ({
-  created,
+  recoveryEmail,
   signerAddress,
 }: {
-  created: AgentLoginGrant["created"];
+  recoveryEmail: string;
   signerAddress: string;
 }): string =>
-  [
-    created === null
-      ? null
-      : `Tell the person the recovery email is ${created.recoveryEmail} and ask them to check it. Splits never ` +
-        "checks it, and a wrong address gives a stranger control of the root account. Logging in to Splits " +
-        "with it makes them an owner of the workspace.",
-    `The local key ${signerAddress} in ${CONFIG_FILE_PATH} is the only signer of the treasury. Never print, ` +
-      "paste or move it. If it is lost, only the recovery email can recover the funds.",
-    created === null
-      ? null
-      : "Suggest that the person logs in with the recovery email before anyone deposits funds.",
-  ]
-    .filter((line) => line !== null)
-    .join(" ");
+  `Tell the person the recovery email is ${recoveryEmail} and ask them to check it. Splits never ` +
+  "checks it, and a wrong address gives a stranger control of the root account. Logging in to Splits " +
+  "with it makes them an owner of the workspace. " +
+  `The local key ${signerAddress} in ${CONFIG_FILE_PATH} is the only signer of the treasury. Never print, ` +
+  "paste or move it. If it is lost, only the recovery email can recover the funds. " +
+  "Suggest that the person logs in with the recovery email before anyone deposits funds.";
 
 const runAutonomousCreate = async ({
   env,
@@ -562,7 +554,9 @@ const runAutonomousCreate = async ({
     if (freshPrivateKey === null) throw error;
     throw new Error(
       `${error instanceof Error ? error.message : String(error)} The new key ${account.address} is saved. ` +
-        `Retry with --key ${account.address}: if the workspace was created, the retry returns it instead of creating another.`,
+        `Retry with --key ${account.address}. If the retry says the key already created a workspace, the ` +
+        "person at the recovery email logs in to Splits and approves a browser login started with " +
+        `\`auth login-start --key ${account.address}\`.`,
     );
   });
   const saved = await saveApprovedLogin({
@@ -573,7 +567,7 @@ const runAutonomousCreate = async ({
     freshPrivateKey: null,
   });
   const next = agentOwnedNext({
-    created: grant.created,
+    recoveryEmail: grant.created.recoveryEmail,
     signerAddress: account.address,
   });
   if (!mcpMode()) {
@@ -1205,8 +1199,9 @@ workspace.command("create-agent-owned", {
     "signer of the root account, which owns the treasury, and whoever logs in to Splits with it becomes an " +
     "owner of the workspace. Splits sends it no email and does not verify it. This agent's local key is the " +
     "only signer of the treasury, the deposit address on every chosen chain. A new local key is saved before " +
-    "the call. A key creates one workspace: calling again with the same key returns a new API key for that " +
-    "workspace. The API key is saved as a new active workspace and never appears in the output. Off-ramp and " +
+    "the call. A key creates one workspace and gets its API key once: a second call with the same key is " +
+    "refused, and a new API key for that workspace needs a browser login (`auth login-start`) that an owner " +
+    "approves. The API key is saved as a new active workspace and never appears in the output. Off-ramp and " +
     "paid plans stay unavailable until a person joins. The local key is the money: never print, paste or move " +
     "it. Follow the `next` field of the result, and relay its warning to the person.",
   env: authEnv,
@@ -1220,7 +1215,7 @@ workspace.command("create-agent-owned", {
       ),
       key: browserLoginOptions.shape.key.describe(
         "Saved local key that becomes the treasury signer. Without it, a new key is saved before the call. " +
-          "Pass the key that created a workspace to get a new API key for it.",
+          "A key that already created a workspace is refused.",
       ),
       clientName: browserLoginOptions.shape.clientName.describe(
         "The name of the app the person is using to talk to you (for example `Claude Code`). " +

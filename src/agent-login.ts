@@ -23,6 +23,8 @@ export type AgentLoginGrant = {
   created: CreatedWorkspace | null;
 };
 
+export type AgentOwnedGrant = AgentLoginGrant & { created: CreatedWorkspace };
+
 export type FinishedAgentLogin =
   | { status: "denied"; reason: "person_declined" | "wrong_code" }
   | { status: "consumed" | "expired" }
@@ -109,7 +111,7 @@ export const createAutonomousWorkspace = async ({
   clientName: string;
   recoveryEmail: string;
   workspace: CreateWorkspacePrefill;
-}): Promise<AgentLoginGrant> => {
+}): Promise<AgentOwnedGrant> => {
   const credentials = { apiKey: null, apiUrl };
   const { data: challenge } = await httpRequest<{
     data: { nonce: string; message: string };
@@ -127,7 +129,7 @@ export const createAutonomousWorkspace = async ({
   });
 
   const signature = await signer.signMessage({ message: challenge.message });
-  const { data } = await httpRequest<{ data: AgentLoginGrant }>(
+  const { data } = await httpRequest<{ data: AgentOwnedGrant }>(
     credentials,
     "/workspaces",
     {
