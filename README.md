@@ -350,7 +350,7 @@ splits accounting reports list
 splits accounting reports job <jobId>
 ```
 
-Reports: `transactions`, `lots`, `lot-timeline`, `realized-gains`, `tokens`, `statement`. The statement is always a PDF. Filters match the app's, and each report ignores the ones it doesn't read (`--help` names which reports take which). `--account-ids` takes account ids from `splits accounts list`, not addresses. `--out` won't replace an existing file unless you pass `--force`.
+Reports: `transactions`, `lots`, `lot-timeline`, `realized-gains`, `tokens`, `statement`, `pnl`. The statement is always a PDF. `pnl` needs categorization enabled for the org, and `--by-account` breaks `tokens` out per account. Filters match the app's, and each report ignores the ones it doesn't read (`--help` names which reports take which). `--account-ids` takes account ids from `splits accounts list`, not addresses. `--out` won't replace an existing file unless you pass `--force`.
 
 ```sh
 # Read tax lots, and the assertion history behind one
@@ -381,6 +381,27 @@ splits accounting assertions bulk --file ./seeds.json
 ```
 
 ```sh
+# Manage the chart of accounts. Exports show the category as the book account.
+splits accounting categories list --include-archived
+splits accounting categories create --label "Software & services" --account-type expense --code 6100
+splits accounting categories update <categoryId> --label "Software"
+splits accounting categories update <categoryId> --clear-code
+splits accounting categories archive <categoryId>
+
+# Rules categorize every past and future match; the most specific rule wins
+splits accounting rules list
+splits accounting rules create --direction outbound --category-id <categoryId> --counterparty-address 0xabc...
+splits accounting rules update <ruleId> --chain-id 8453 --clear counterpartyAddress
+splits accounting rules delete <ruleId>
+
+# Override single transfers or accrual lots; revoke falls back to rules and defaults
+splits accounting categorize set --target-ids <transferId>,<transferId> --category-id <categoryId>
+splits accounting categorize set --target-kind accrual_lot --target-ids <lotId> --category-id <categoryId>
+splits accounting categorize revoke --target-ids <transferId>
+splits accounting categorize bulk --file ./overrides.json
+```
+
+```sh
 # Import an address the org held before Splits and poll its backfill
 splits accounting imports create --name "Old treasury" --address 0xabc... \
   --chain-ids 8453,1 --cutoff-at 2026-01-15
@@ -395,7 +416,7 @@ splits accounting recompute job <jobId>
 splits accounting recompute run   # force a full rebuild
 ```
 
-Writing assertions, creating imports, and generating reports need a write-scoped, user-bound API key. Queueing a recompute needs write scope.
+Writing assertions, categories, rules, and overrides, creating imports, and generating reports need a write-scoped, user-bound API key. Queueing a recompute needs write scope.
 
 ### Members
 
@@ -520,6 +541,9 @@ Every tool that calls the API takes an optional `workspace` argument, so one MCP
 - `accounting_reports_list` / `accounting_reports_job` — List generated reports, poll a queued one
 - `accounting_lots_list` / `accounting_lots_assertions` — Read tax lots and a lot's assertion history
 - `accounting_assertions_seed` / `_edit` / `_revoke` / `_designate` / `_bulk` — Write lot assertions
+- `accounting_categories_list` / `_create` / `_update` / `_archive` — Manage the chart of accounts
+- `accounting_rules_list` / `_create` / `_update` / `_delete` — Manage categorization rules
+- `accounting_categorize_set` / `_revoke` / `_bulk` — Override the category on transfers and accrual lots
 - `accounting_imports_create` / `_list` / `_status` — Import an external address and poll its backfill
 - `accounting_recompute_current` / `_job` / `_run` — Track or force the lot recompute that applies assertion writes
 

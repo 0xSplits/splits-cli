@@ -1797,7 +1797,8 @@ cli.command(accounts);
 // =============================================================================
 
 const accounting = Cli.create("accounting", {
-  description: "Tax lots, lot assertions, accounting reports, imports, and lot recomputes",
+  description:
+    "Tax lots, lot assertions, categories and rules, accounting reports, imports, and lot recomputes",
 });
 
 const REPORT_NAMES = [
@@ -1807,6 +1808,7 @@ const REPORT_NAMES = [
   "realized-gains",
   "tokens",
   "statement",
+  "pnl",
 ] as const;
 
 const REPORT_POLL_INTERVAL_MS = 2_000;
@@ -1911,7 +1913,8 @@ reports.command("generate", {
     "Waits for reports large enough to be queued, up to --timeout. " +
     "Reports: transactions (all activity), lots (open inventory as of a date), " +
     "lot-timeline (per-lot open and close events), realized-gains (RGL), " +
-    "tokens (per-token balances), statement (transactions + tokens + gains, always PDF). " +
+    "tokens (per-token balances with cost basis and unrealized gain), statement (transactions + tokens + gains, always PDF), " +
+    "pnl (income and expenses by category plus realized gains; needs categorization enabled for the org). " +
     "Each report ignores filters it does not support; each filter names the reports that read it. " +
     "Examples: { report: 'realized-gains', period: 'lastYear', fileFormat: 'pdf', out: './rgl.pdf' }; " +
     "{ report: 'lots', openAsOf: '2026-12-31' }",
@@ -1993,6 +1996,10 @@ reports.command("generate", {
       .string()
       .optional()
       .describe("Substring search across token symbols and names. tokens only."),
+    byAccount: z
+      .boolean()
+      .default(false)
+      .describe("One row per account and token instead of one per token. tokens only."),
     openAsOf: z
       .string()
       .optional()
@@ -2041,6 +2048,7 @@ reports.command("generate", {
         inbound: options.inbound,
         outbound: options.outbound,
         search: options.search,
+        byAccount: options.byAccount,
         openAsOf: normalizeDateInput(options.openAsOf),
         startDate,
         endDate,
@@ -2464,6 +2472,412 @@ assertions.command("bulk", {
 });
 
 accounting.command(assertions);
+
+const categories = Cli.create("categories", {
+  description:
+    "The org's chart of accounts. Every transfer resolves to a category, and exports show it as the book account.",
+});
+
+const ACCOUNT_TYPES = [
+  "income",
+  "expense",
+  "asset",
+  "liability",
+  "equity",
+] as const;
+
+categories.command("list", {
+  description:
+    "List the org's categories, with their account type and system key.",
+  env: authEnv,
+  options: workspaceOption.extend({
+    includeArchived: z
+      .boolean()
+      .default(false)
+      .describe(
+        "Include archived categories, which existing rules and overrides may still point at",
+      ),
+  }),
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
+    return apiRequest(
+      env,
+      `/accounting/categories${buildQuery({ includeArchived: options.includeArchived })}`,
+    );
+  },
+});
+
+categories.command("create", {
+  description:
+    "Add a category. Labels are unique among the org's active categories. " +
+    "Only income and expense categories reach the P&L.",
+  env: authEnv,
+  options: workspaceOption.extend({
+    label: z
+      .string()
+      .min(1)
+      .describe("Category name, e.g. 'Software & services'"),
+    accountType: z.enum(ACCOUNT_TYPES).describe("Account type"),
+    code: z
+      .string()
+      .optional()
+      .describe("Your own account number, for matching to Xero or QBO"),
+  }),
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
+    return apiRequest(env, "/accounting/categories", {
+      method: "PUT",
+      body: {
+        label: options.label,
+        accountType: options.accountType,
+        code: options.code,
+      },
+    });
+  },
+});
+
+categories.command("update", {
+  description:
+    "Rename a category, change its account type, or set or clear its code. Pass at least one. " +
+    "Renaming keeps every rule and override pointing at it.",
+  env: authEnv,
+  args: z.object({
+    categoryId: z
+      .string()
+      .uuid()
+      .describe("Category id from 'accounting categories list'"),
+  }),
+  options: workspaceOption.extend({
+    label: z.string().min(1).optional().describe("New name"),
+    accountType: z.enum(ACCOUNT_TYPES).optional().describe("New account type"),
+    code: z.string().optional().describe("New account number"),
+    clearCode: z
+      .boolean()
+      .default(false)
+      .describe("Remove the category's account number"),
+  }),
+  async run({ env: processEnv, args, options }) {
+    const env = await withWorkspace(processEnv, options);
+    if (options.clearCode && options.code !== undefined) {
+      throw new Error("Pass --code or --clear-code, not both.");
+    }
+    if (
+      !options.label &&
+      !options.accountType &&
+      options.code === undefined &&
+      !options.clearCode
+    ) {
+      throw new Error(
+        "Pass at least one of --label, --account-type, --code, or --clear-code.",
+      );
+    }
+    return apiRequest(env, `/accounting/categories/${args.categoryId}`, {
+      method: "PUT",
+      body: {
+        label: options.label,
+        accountType: options.accountType,
+        // The API clears a code on null.
+        code: options.clearCode ? null : options.code,
+      },
+    });
+  },
+});
+
+categories.command("archive", {
+  description:
+    "Archive a category. Rules and overrides that point at it keep resolving to it; re-point them to move those transfers.",
+  env: authEnv,
+  args: z.object({
+    categoryId: z
+      .string()
+      .uuid()
+      .describe("Category id from 'accounting categories list'"),
+  }),
+  options: workspaceOption,
+  async run({ env: processEnv, args, options }) {
+    const env = await withWorkspace(processEnv, options);
+    return apiRequest(
+      env,
+      `/accounting/categories/${args.categoryId}/archive`,
+      {
+        method: "PUT",
+      },
+    );
+  },
+});
+
+accounting.command(categories);
+
+const rules = Cli.create("rules", {
+  description:
+    "Categorize every past and future transfer that matches. When several rules match, the most specific wins: " +
+    "compare which conditions they set in the order counterparty, source account, token, chain. " +
+    "An override on a single transfer still beats any rule, and internal, bridge, swap, and Earn transfers are never categorized.",
+});
+
+const RULE_CONDITIONS = [
+  "counterpartyAddress",
+  "sourceSmartAccountAddress",
+  "chainId",
+  "tokenAddress",
+] as const;
+
+const ruleConditionOptions = {
+  counterpartyAddress: evmAddress
+    .optional()
+    .describe("Match transfers to or from this address"),
+  sourceSmartAccountAddress: evmAddress
+    .optional()
+    .describe(
+      "Match transfers on this org account: the sender for outbound, the receiver for inbound",
+    ),
+  chainId: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe("Match transfers on this chain"),
+  tokenAddress: evmAddress
+    .optional()
+    .describe("Match transfers of this token. Requires --chain-id."),
+};
+
+rules.command("list", {
+  description:
+    "List the org's rules, with each counterparty's contact label when there is one.",
+  env: authEnv,
+  options: workspaceOption,
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
+    return apiRequest(env, "/accounting/rules");
+  },
+});
+
+rules.command("create", {
+  description:
+    "Add a rule. Sets a direction, a target category, and at least one condition. " +
+    "A rule with the same direction and conditions as an existing one is rejected.",
+  env: authEnv,
+  options: workspaceOption.extend({
+    direction: z
+      .enum(["inbound", "outbound"])
+      .describe("Which transfers the rule matches"),
+    categoryId: z
+      .string()
+      .uuid()
+      .describe("Category id from 'accounting categories list'"),
+    ...ruleConditionOptions,
+  }),
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
+    return apiRequest(env, "/accounting/rules", {
+      method: "PUT",
+      body: {
+        direction: options.direction,
+        categoryId: options.categoryId,
+        counterpartyAddress: options.counterpartyAddress,
+        sourceSmartAccountAddress: options.sourceSmartAccountAddress,
+        chainId: options.chainId,
+        tokenAddress: options.tokenAddress,
+      },
+    });
+  },
+});
+
+rules.command("update", {
+  description:
+    "Change a rule's direction, category, or conditions. Omitted fields stay as they are; --clear removes conditions.",
+  env: authEnv,
+  args: z.object({
+    ruleId: z.string().uuid().describe("Rule id from 'accounting rules list'"),
+  }),
+  options: workspaceOption.extend({
+    direction: z
+      .enum(["inbound", "outbound"])
+      .optional()
+      .describe("New direction"),
+    categoryId: z.string().uuid().optional().describe("New target category id"),
+    ...ruleConditionOptions,
+    clear: z
+      .string()
+      .optional()
+      .describe(
+        `Comma-separated conditions to remove: ${RULE_CONDITIONS.join(", ")}`,
+      ),
+  }),
+  async run({ env: processEnv, args, options }) {
+    const env = await withWorkspace(processEnv, options);
+    const cleared = (options.clear ?? "")
+      .split(",")
+      .map((c) => c.trim())
+      .filter(Boolean);
+    const unknown = cleared.filter(
+      (c) => !(RULE_CONDITIONS as readonly string[]).includes(c),
+    );
+    if (unknown.length > 0) {
+      throw new Error(
+        `Unknown condition(s) in --clear: ${unknown.join(", ")}. Use ${RULE_CONDITIONS.join(", ")}.`,
+      );
+    }
+
+    const body: Record<string, unknown> = {
+      direction: options.direction,
+      categoryId: options.categoryId,
+      ...Object.fromEntries(
+        RULE_CONDITIONS.map((c) => [
+          c,
+          cleared.includes(c) ? null : options[c],
+        ]),
+      ),
+    };
+    if (Object.values(body).every((value) => value === undefined)) {
+      throw new Error("Pass at least one field to change, or --clear.");
+    }
+
+    return apiRequest(env, `/accounting/rules/${args.ruleId}`, {
+      method: "PUT",
+      body,
+    });
+  },
+});
+
+rules.command("delete", {
+  description:
+    "Delete a rule. Transfers it categorized fall back to the next most specific rule or the default.",
+  env: authEnv,
+  args: z.object({
+    ruleId: z.string().uuid().describe("Rule id from 'accounting rules list'"),
+  }),
+  options: workspaceOption,
+  async run({ env: processEnv, args, options }) {
+    const env = await withWorkspace(processEnv, options);
+    return apiRequest(env, `/accounting/rules/${args.ruleId}`, {
+      method: "DELETE",
+    });
+  },
+});
+
+accounting.command(rules);
+
+const categorize = Cli.create("categorize", {
+  description:
+    "Override the category on single transfers or accrual lots. An override beats any rule or default; " +
+    "revoking it falls back to them. Categories never affect basis, so nothing is recomputed.",
+});
+
+const CATEGORY_ASSERTION_BULK_LIMIT = 500;
+
+const categoryTargetOptions = {
+  targetKind: z
+    .enum(["transfer", "accrual_lot"])
+    .default("transfer")
+    .describe(
+      "transfer for an asset transfer id, accrual_lot for a rebasing accrual's lot id",
+    ),
+  targetIds: z
+    .string()
+    .describe(
+      `Comma-separated transfer ids (the Transfer ID column in exports) or accrual lot ids, up to ${CATEGORY_ASSERTION_BULK_LIMIT}`,
+    ),
+};
+
+// One id writes through the single route; several go as one atomic bulk write.
+const writeCategoryAssertions = (
+  env: AuthEnv,
+  assertions: Record<string, unknown>[],
+) => {
+  if (assertions.length === 0) {
+    throw new Error("Pass at least one id in --target-ids.");
+  }
+  if (assertions.length > CATEGORY_ASSERTION_BULK_LIMIT) {
+    throw new Error(
+      `A bulk write is limited to ${CATEGORY_ASSERTION_BULK_LIMIT} assertions; got ${assertions.length}.`,
+    );
+  }
+  return assertions.length === 1
+    ? apiRequest(env, "/accounting/category-assertions", {
+        method: "PUT",
+        body: { assertion: assertions[0] },
+      })
+    : apiRequest(env, "/accounting/category-assertions/bulk", {
+        method: "PUT",
+        body: { assertions },
+      });
+};
+
+categorize.command("set", {
+  description:
+    "Put transfers or accrual lots in a category. Internal, bridge, swap, and Earn transfers are rejected. " +
+    "To categorize every transfer with an address, write a rule instead.",
+  env: authEnv,
+  options: workspaceOption.extend({
+    ...categoryTargetOptions,
+    categoryId: z
+      .string()
+      .uuid()
+      .describe("Category id from 'accounting categories list'"),
+  }),
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
+    return writeCategoryAssertions(
+      env,
+      splitCsv(options.targetIds).map((targetId) => ({
+        kind: "set",
+        targetKind: options.targetKind,
+        targetId,
+        categoryId: options.categoryId,
+      })),
+    );
+  },
+});
+
+categorize.command("revoke", {
+  description:
+    "Remove the override on transfers or accrual lots, so rules and defaults categorize them again.",
+  env: authEnv,
+  options: workspaceOption.extend(categoryTargetOptions),
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
+    return writeCategoryAssertions(
+      env,
+      splitCsv(options.targetIds).map((targetId) => ({
+        kind: "revoke",
+        targetKind: options.targetKind,
+        targetId,
+      })),
+    );
+  },
+});
+
+categorize.command("bulk", {
+  description:
+    `Write up to ${CATEGORY_ASSERTION_BULK_LIMIT} overrides from a JSON file, as one atomic insert: a rejected row leaves nothing behind. ` +
+    "The file holds an array of { kind: 'set' | 'revoke', targetKind: 'transfer' | 'accrual_lot', targetId, categoryId? }; " +
+    "a set names a categoryId and a revoke doesn't. The last row per target wins.",
+  env: authEnv,
+  options: workspaceOption.extend({
+    file: z
+      .string()
+      .describe("Path to a JSON file holding an array of overrides"),
+  }),
+  async run({ env: processEnv, options }) {
+    const env = await withWorkspace(processEnv, options);
+    const parsed: unknown = JSON.parse(readFileSync(options.file, "utf8"));
+
+    if (!Array.isArray(parsed)) {
+      throw new Error(
+        `${options.file} must hold a JSON array of override objects.`,
+      );
+    }
+
+    return apiRequest(env, "/accounting/category-assertions/bulk", {
+      method: "PUT",
+      body: { assertions: parsed },
+    });
+  },
+});
+
+accounting.command(categorize);
 
 const imports = Cli.create("imports", {
   description: "Import external addresses into accounting",
