@@ -43,6 +43,14 @@ splits workspace create --name "Acme" --chain-ids 8453,1 --client-name "Claude C
 
 The same browser login, with the approval page opened on its create tab and prefilled with the name and chains (`--chain-ids` defaults to the chains a new workspace gets in the app). The person approves as the owner. Their login email is the only signer of the root account, which owns the treasury; this CLI's local key is the only signer of the treasury, which is the deposit address on every chosen chain. The key is saved as a new active workspace and a diagram of the accounts is printed. Under MCP the tool returns the approval URL and the code without waiting; `auth login-status` then waits for the approval and saves the workspace.
 
+**Workspace owned by the agent**, with no person approving:
+
+```sh
+splits workspace create-agent-owned --name "Acme" --client-name "Claude Code" --recovery-email ops@acme.com
+```
+
+Use it only when the person asked for a workspace the agent owns, or when no person can approve; otherwise use `workspace create`. No browser opens and no code is needed. The workspace is created at once, the agent is its only owner and its API key has every scope. The recovery email is the only signer of the root account, through an email wallet, and this CLI's local key is the only signer of the treasury. The person at the recovery email becomes an owner of the workspace when they log in to Splits with it, and can recover it from there. Splits sends no email to the address and does not check it, so use an address the person gave you. The new local key is saved before the call. A key creates one workspace and gets its API key once: running the command again with the same `--key` is refused, and a new API key for that workspace needs a browser login (`auth login-start --key <address>`) that an owner approves. Off-ramp and paid plans need a person, so they stay unavailable until the person joins. The result carries a warning, in `next` and on stderr, for the agent to relay: check the recovery email and log in with it before anyone deposits, and never print, paste or move the local key.
+
 Or bring an API key from [Splits Settings](https://app.splits.org/settings/team/api-keys/). Two options:
 
 **Environment variable** (preferred for CI and headless contexts):

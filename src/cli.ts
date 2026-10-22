@@ -11,6 +11,7 @@ import {
   type AgentLoginGrant,
   type FinishedAgentLogin,
   type CreateWorkspacePrefill,
+  createAutonomousWorkspace,
   describeCreatedWorkspace,
   openInBrowser,
   pollAgentLogin,
@@ -504,6 +505,82 @@ const runBrowserLogin = async ({
   if (saved.diagram !== null) process.stderr.write(`${saved.diagram}\n`);
   warnIfEnvKeySet(env);
   return { ...saved, signerAddress: account.address };
+};
+
+const agentOwnedNext = ({
+  recoveryEmail,
+  signerAddress,
+}: {
+  recoveryEmail: string;
+  signerAddress: string;
+}): string =>
+  `Tell the person the recovery email is ${recoveryEmail} and ask them to check it. Splits never ` +
+  "checks it, and a wrong address gives a stranger control of the root account. Logging in to Splits " +
+  "with it makes them an owner of the workspace. " +
+  `The local key ${signerAddress} in ${CONFIG_FILE_PATH} is the only signer of the treasury. Never print, ` +
+  "paste or move it. If it is lost, only the recovery email can recover the funds. " +
+  "Suggest that the person logs in with the recovery email before anyone deposits funds.";
+
+const runAutonomousCreate = async ({
+  env,
+  apiUrl,
+  key,
+  clientName,
+  recoveryEmail,
+  workspace,
+}: {
+  env: z.infer<typeof authEnv>;
+  apiUrl: string | undefined;
+  key: string | undefined;
+  clientName: string;
+  recoveryEmail: string;
+  workspace: CreateWorkspacePrefill;
+}) => {
+  const { account, freshPrivateKey } = await loginSigner(key);
+  if (freshPrivateKey !== null) {
+    await saveKey({
+      name: workspace.name,
+      address: account.address,
+      privateKey: freshPrivateKey,
+    });
+  }
+  const grant = await createAutonomousWorkspace({
+    apiUrl: apiUrl ?? DEFAULT_API_URL,
+    signer: account,
+    clientName,
+    recoveryEmail,
+    workspace,
+  }).catch((error: unknown) => {
+    if (freshPrivateKey === null) throw error;
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)} The new key ${account.address} is saved. ` +
+        `Retry with --key ${account.address}. If the retry says the key already created a workspace, the ` +
+        "person at the recovery email logs in to Splits and approves a browser login started with " +
+        `\`auth login-start --key ${account.address}\`.`,
+    );
+  });
+  const saved = await saveApprovedLogin({
+    grant,
+    apiUrl,
+    name: undefined,
+    signerAddress: account.address,
+    freshPrivateKey: null,
+  });
+  const next = agentOwnedNext({
+    recoveryEmail: grant.created.recoveryEmail,
+    signerAddress: account.address,
+  });
+  if (!mcpMode()) {
+    if (saved.diagram !== null) process.stderr.write(`${saved.diagram}\n`);
+    process.stderr.write(`Warning: ${next}\n`);
+  }
+  warnIfEnvKeySet(env);
+  return {
+    ...saved,
+    keySaved: freshPrivateKey !== null,
+    signerAddress: account.address,
+    next,
+  };
 };
 
 const startPendingLogin = async ({
@@ -1055,9 +1132,28 @@ const workspace = Cli.create("workspace", {
   description: "Create Splits workspaces.",
 });
 
+const workspaceInputOptions = z.object({
+  name: z.string().trim().min(1).max(255),
+  chainIds: z
+    .string()
+    .optional()
+    .describe(
+      "Comma-separated chain ids to prefill (e.g. '8453,1'). Defaults to the chains a new workspace gets in the app.",
+    ),
+});
+
+const toWorkspaceInput = (
+  options: z.infer<typeof workspaceInputOptions>,
+): CreateWorkspacePrefill => ({
+  name: options.name,
+  chainIds:
+    options.chainIds === undefined ? undefined : parseChainIds(options.chainIds),
+});
+
 workspace.command("create", {
   description:
-    "Create a new Splits workspace through the person's browser approval. Opens the approval page " +
+    "Create a new Splits workspace that the person owns and approves in the browser. Use this whenever " +
+    "a person is in the conversation. Opens the approval page " +
     "on its create tab, prefilled with the name and chains; the person logs in, can change them, and " +
     "approves. The person becomes the workspace's owner. Two accounts are created, at the same " +
     "address on every chosen chain: the root, whose only signer is the person's login email and which " +
@@ -1070,42 +1166,80 @@ workspace.command("create", {
     "Under MCP it returns the approval URL and the code without waiting: show both to the person, then call " +
     "`auth login-status` right away, which waits for the approval, saves the workspace and returns the diagram. " +
     "Use this rather than `org create` when this agent will work in the new workspace: `org create` only " +
-    "emails the person a setup link and gives this agent no API key and no signer.",
+    "emails the person a setup link and gives this agent no API key and no signer. " +
+    "For a workspace this agent owns with no approval, see `workspace create-agent-owned`.",
   env: authEnv,
-  options: browserLoginOptions.omit({ name: true }).extend({
-    name: z
-      .string()
-      .trim()
-      .min(1)
-      .max(255)
-      .describe(
+  options: browserLoginOptions.omit({ name: true }).merge(
+    workspaceInputOptions.extend({
+      name: workspaceInputOptions.shape.name.describe(
         "Workspace name to prefill. The local workspace alias is derived from the name the person approves.",
       ),
-    chainIds: z
-      .string()
-      .optional()
-      .describe(
-        "Comma-separated chain ids to prefill (e.g. '8453,1'). Defaults to the chains a new workspace gets in the app.",
-      ),
-  }),
+    }),
+  ),
   async run({ env, options }) {
-    const apiUrl = resolveLoginApiUrl(env, options.apiUrl);
-    const createWorkspace = {
-      name: options.name,
-      chainIds:
-        options.chainIds === undefined
-          ? undefined
-          : parseChainIds(options.chainIds),
-    };
     const login = {
-      apiUrl,
+      apiUrl: resolveLoginApiUrl(env, options.apiUrl),
       key: options.key,
       clientName: options.clientName,
       name: undefined,
-      createWorkspace,
+      createWorkspace: toWorkspaceInput(options),
     };
     if (mcpMode()) return startPendingLogin(login);
     return runBrowserLogin({ env, ...login });
+  },
+});
+
+workspace.command("create-agent-owned", {
+  description:
+    "Create a new Splits workspace that this agent owns. No browser, no person approves: it is created at " +
+    "once, this agent is its only owner, and its API key has every scope. Use it only when the person " +
+    "explicitly asked for a workspace the agent owns, or when no person can approve. Never choose it because " +
+    "it is faster; when a person is in the conversation and did not ask for it, use `workspace create`. " +
+    "recoveryEmail is required and must be the email the person gave; never make one up. It is the only " +
+    "signer of the root account, which owns the treasury, and whoever logs in to Splits with it becomes an " +
+    "owner of the workspace. Splits sends it no email and does not verify it. This agent's local key is the " +
+    "only signer of the treasury, the deposit address on every chosen chain. A new local key is saved before " +
+    "the call. A key creates one workspace and gets its API key once: a second call with the same key is " +
+    "refused, and a new API key for that workspace needs a browser login (`auth login-start`) that an owner " +
+    "approves. The API key is saved as a new active workspace and never appears in the output. Off-ramp and " +
+    "paid plans stay unavailable until a person joins. The local key is the money: never print, paste or move " +
+    "it. Follow the `next` field of the result, and relay its warning to the person.",
+  env: authEnv,
+  options: browserLoginOptions.omit({ name: true }).merge(
+    workspaceInputOptions.extend({
+      name: workspaceInputOptions.shape.name.describe(
+        "Workspace name. The local workspace alias is derived from it.",
+      ),
+      chainIds: workspaceInputOptions.shape.chainIds.describe(
+        "Comma-separated chain ids (e.g. '8453,1'). Defaults to the chains a new workspace gets in the app.",
+      ),
+      key: browserLoginOptions.shape.key.describe(
+        "Saved local key that becomes the treasury signer. Without it, a new key is saved before the call. " +
+          "A key that already created a workspace is refused.",
+      ),
+      clientName: browserLoginOptions.shape.clientName.describe(
+        "The name of the app the person is using to talk to you (for example `Claude Code`). " +
+          "It names the treasury signer and the API key.",
+      ),
+      recoveryEmail: z
+        .string()
+        .trim()
+        .email()
+        .describe(
+          "Email of the person who can recover the workspace, exactly as they gave it. Never make one up. " +
+            "It becomes the root signer, and whoever logs in to Splits with it becomes an owner.",
+        ),
+    }),
+  ),
+  async run({ env, options }) {
+    return runAutonomousCreate({
+      env,
+      apiUrl: resolveLoginApiUrl(env, options.apiUrl),
+      key: options.key,
+      clientName: options.clientName,
+      recoveryEmail: options.recoveryEmail,
+      workspace: toWorkspaceInput(options),
+    });
   },
 });
 

@@ -23,6 +23,8 @@ export type AgentLoginGrant = {
   created: CreatedWorkspace | null;
 };
 
+export type AgentOwnedGrant = AgentLoginGrant & { created: CreatedWorkspace };
+
 export type FinishedAgentLogin =
   | { status: "denied"; reason: "person_declined" | "wrong_code" }
   | { status: "consumed" | "expired" }
@@ -95,6 +97,53 @@ export const startAgentLogin = async ({
     },
   });
   return { ...data, codeVerifier };
+};
+
+export const createAutonomousWorkspace = async ({
+  apiUrl,
+  signer,
+  clientName,
+  recoveryEmail,
+  workspace,
+}: {
+  apiUrl: string;
+  signer: MessageSigner;
+  clientName: string;
+  recoveryEmail: string;
+  workspace: CreateWorkspacePrefill;
+}): Promise<AgentOwnedGrant> => {
+  const credentials = { apiKey: null, apiUrl };
+  const { data: challenge } = await httpRequest<{
+    data: { nonce: string; message: string };
+  }>(credentials, "/workspaces/challenge", {
+    method: "POST",
+    requireAuth: false,
+    body: { address: signer.address },
+  }).catch((error: unknown) => {
+    if (error instanceof SplitsApiError && error.status === 404) {
+      throw new Error(
+        `${apiUrl} does not support creating a workspace without a browser yet. Use \`splits workspace create\`, which the person approves in the browser.`,
+      );
+    }
+    throw error;
+  });
+
+  const signature = await signer.signMessage({ message: challenge.message });
+  const { data } = await httpRequest<{ data: AgentOwnedGrant }>(
+    credentials,
+    "/workspaces",
+    {
+      method: "POST",
+      requireAuth: false,
+      body: {
+        clientName,
+        recoveryEmail,
+        workspace,
+        signer: { address: signer.address, nonce: challenge.nonce, signature },
+      },
+    },
+  );
+  return data;
 };
 
 export const pollAgentLogin = async ({
