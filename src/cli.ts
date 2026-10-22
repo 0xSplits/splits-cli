@@ -19,6 +19,7 @@ import {
   startAgentLogin,
   waitForAgentLogin,
 } from "./agent-login.js";
+import { IS_PROD_BUILD } from "./build-target.js";
 import {
   assertWorkspaceAlias,
   CONFIG_FILE_PATH,
@@ -33,6 +34,7 @@ import {
   removeKey,
   removePendingLogin,
   removeWorkspace,
+  resolveApiUrl,
   resolveCredentials,
   saveKey,
   savePendingLogin,
@@ -60,6 +62,9 @@ const cli = Cli.create("splits", {
   description: "Splits CLI — programmatic access to the Splits platform",
 });
 
+const nonProdOnly = <Shape extends z.ZodRawShape>(shape: Shape): Shape =>
+  (IS_PROD_BUILD ? {} : shape) as Shape;
+
 // Auth config (reads from env; both values also resolvable from a workspace
 // in ~/.splits/config.json saved by `splits auth login`). Env takes precedence.
 const authEnv = z.object({
@@ -70,13 +75,15 @@ const authEnv = z.object({
       "Splits API key (sk_read_... or legacy hex key). " +
         "Falls back to the selected workspace's key saved by `splits auth login` when unset.",
     ),
-  SPLITS_API_URL: z
-    .string()
-    .optional()
-    .describe(
-      "Splits API base URL. " +
-        "Falls back to the selected workspace's URL saved by `splits auth login`, then to the production URL.",
-    ),
+  ...nonProdOnly({
+    SPLITS_API_URL: z
+      .string()
+      .optional()
+      .describe(
+        "Splits API base URL. " +
+          "Falls back to the selected workspace's URL saved by `splits auth login`, then to the production URL.",
+      ),
+  }),
   SPLITS_WORKSPACE: z
     .string()
     .optional()
@@ -628,14 +635,16 @@ const startPendingLogin = async ({
 };
 
 const loginOptions = z.object({
-  apiUrl: z
-    .string()
-    .url()
-    .optional()
-    .describe(
-      "Optional API base URL override to persist alongside the key (e.g. staging). " +
-        "Defaults to SPLITS_API_URL when that is set, so the saved URL is the one the key was checked against.",
-    ),
+  ...nonProdOnly({
+    apiUrl: z
+      .string()
+      .url()
+      .optional()
+      .describe(
+        "Optional API base URL override to persist alongside the key (e.g. staging). " +
+          "Defaults to SPLITS_API_URL when that is set, so the saved URL is the one the key was checked against.",
+      ),
+  }),
   name: z
     .string()
     .optional()
@@ -809,10 +818,21 @@ auth.command("login-status", {
       );
     }
 
+    const apiUrl = resolveApiUrl({
+      envUrl: undefined,
+      saved:
+        pending.apiUrl === null
+          ? null
+          : {
+              url: pending.apiUrl,
+              label: `Pending login ${pending.requestId}`,
+              fix: "Start a new login with `splits auth login-start`.",
+            },
+    });
     const result = await waitForAgentLogin({
       poll: () =>
         pollAgentLogin({
-          apiUrl: pending.apiUrl ?? DEFAULT_API_URL,
+          apiUrl,
           requestId: pending.requestId,
           codeVerifier: pending.codeVerifier,
         }),
@@ -4185,13 +4205,15 @@ cli.command(feedback);
 // authenticated commands so `auth login --api-url <staging>` affects public
 // routes too (instead of silently falling back to production).
 const publicEnv = z.object({
-  SPLITS_API_URL: z
-    .string()
-    .optional()
-    .describe(
-      "Splits API base URL. " +
-        "Falls back to the URL saved by `splits auth login`, then to the production URL.",
-    ),
+  ...nonProdOnly({
+    SPLITS_API_URL: z
+      .string()
+      .optional()
+      .describe(
+        "Splits API base URL. " +
+          "Falls back to the URL saved by `splits auth login`, then to the production URL.",
+      ),
+  }),
 });
 
 const org = Cli.create("org", {
