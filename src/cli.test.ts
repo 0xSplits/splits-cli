@@ -76,3 +76,50 @@ test("custom --calls parses a JSON array before sending the proposal", async () 
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
+
+test("accounts deploy proposes a zero-value call to the account itself", async () => {
+  let request: unknown;
+  const server = createServer(async (req, res) => {
+    assert.equal(req.method, "POST");
+    assert.equal(req.url, "/public/v1/proposals/custom");
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk);
+    request = JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
+    res.writeHead(201, { "Content-Type": "application/json" });
+    res.end('{"data":{"id":"test"}}');
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  try {
+    const apiUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    await execFileAsync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        cliPath,
+        "accounts",
+        "deploy",
+        account,
+        "--chain-id",
+        "8453",
+      ],
+      {
+        env: {
+          ...process.env,
+          SPLITS_API_KEY: "sk_test",
+          SPLITS_API_URL: apiUrl,
+        },
+      },
+    );
+    assert.deepEqual(request, {
+      account,
+      chainId: 8453,
+      calls: [{ to: account, data: "0x", value: "0" }],
+      name: "Smart account deployment",
+      memo: "Deploy account on chain 8453",
+    });
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});

@@ -1500,6 +1500,34 @@ accounts.command("create", {
   },
 });
 
+accounts.command("deploy", {
+  description:
+    "Create a deploy-only proposal for an existing account on an enabled network. " +
+    "The proposal makes a zero-value call to the account itself, so no funds move. " +
+    "Sign it via the returned signUrl or 'transactions sign <id>'; the account " +
+    "deploys only after the transaction executes.",
+  env: authEnv,
+  args: z.object({
+    address: evmAddress.describe("Account address (0x...)"),
+  }),
+  options: workspaceOption.extend({
+    chainId: z.number().int().positive().describe("Enabled network chain ID"),
+  }),
+  async run({ env: processEnv, args, options }) {
+    const env = await withWorkspace(processEnv, options);
+    return apiRequest<{ data?: unknown }>(env, "/proposals/custom", {
+      method: "POST",
+      body: {
+        account: args.address,
+        chainId: options.chainId,
+        calls: [{ to: args.address, data: "0x", value: "0" }],
+        name: "Smart account deployment",
+        memo: `Deploy account on chain ${options.chainId}`,
+      },
+    });
+  },
+});
+
 const typedDataOptionSchema = z.union([
   z.record(z.string(), z.unknown()),
   z.string(),
