@@ -318,6 +318,11 @@ splits accounts create --name "Operations" --passkeyIds <id1>,<id2> --threshold 
 splits accounts create --name "Ops"  --eoaSignerIds <eoa-id1>,<eoa-id2>     --threshold 2
 splits accounts create --name "Bots" --eoaAddresses 0xabc...,0xdef...        --threshold 1
 
+# Deploy an existing account on an enabled network with a zero-value self-call.
+# This creates a proposal; sign it to execute the deployment. No token transfer is needed.
+splits accounts deploy <address> --chain-id 8453
+splits transactions sign <proposal-id>  # Or approve the returned signUrl in the web app.
+
 # List the networks enabled on the org, and any network addition still pending
 splits accounts networks
 
