@@ -283,7 +283,7 @@ auth.command("whoami", {
     "`user.kind` is AGENT when the key belongs to an agent. " +
     "Also reports the workspace the credentials came from (null when SPLITS_API_KEY is set), " +
     "whether they came from the environment or the local keystore, and the local EOA signing " +
-    "keys saved by `splits auth create-key` or `import-key`. For each local key registered " +
+    "keys saved by browser login, `splits auth create-key`, or `import-key`. For each local key registered " +
     "with the backend, `localKeys[].signerId` is the id needed by " +
     "`accounts update-signers --add-eoa-signer-ids`; null means the key exists locally but " +
     "has not been registered (see `auth register-signer`). " +
@@ -411,10 +411,10 @@ const saveApprovedLogin = async ({
   signerAddress: `0x${string}`;
   freshPrivateKey: `0x${string}` | null;
 }) => {
-  const keySaved = grant.created !== null && freshPrivateKey !== null;
-  if (keySaved) {
+  if (freshPrivateKey !== null) {
     await saveKey({ name: grant.orgName, address: signerAddress, privateKey: freshPrivateKey });
   }
+  const keySaved = (await loadLocalKey(signerAddress)) !== null;
   const { alias, replaced } = await saveWorkspace({
     name,
     orgId: grant.orgId,
@@ -584,7 +584,6 @@ const runAutonomousCreate = async ({
   warnIfEnvKeySet(env);
   return {
     ...saved,
-    keySaved: freshPrivateKey !== null,
     signerAddress: account.address,
     next,
   };
@@ -801,7 +800,7 @@ auth.command("login-status", {
   description:
     "Wait for a browser login started by `auth login-start` or `workspace create` until the person " +
     "approves or denies it, or it expires (10 minutes after it started). Once approved, saves the API key " +
-    "as a workspace, makes it active, and returns the workspace (never the key). Denied and expired " +
+    "as a workspace, saves the signing key, makes it active, and returns the workspace (never the key). Denied and expired " +
     "logins are returned as such and forgotten. If this call is cut off, call it again to keep waiting.",
   env: authEnv,
   options: z.object({
