@@ -74,6 +74,8 @@ splits auth logout
 
 `auth login` checks the key against the API and saves it as a **workspace** named after the org (or `--name <alias>`), then makes it the active one. Log in once per org to keep several workspaces side by side:
 
+On a shared machine, a second login to the same org replaces the first saved API key when neither login has a distinct `--name`. Give each agent a unique alias (for example, `auth login-start --name writer` and `auth login-start --name reader`), then select the alias with `--workspace` or `SPLITS_WORKSPACE`. Local signing keys remain in the shared config, so pass `--key <address>` when more than one is saved. Use a separate `HOME` for each agent if their keys must be isolated.
+
 ```sh
 echo $ACME_KEY | splits auth login              # saved as "acme"
 echo $PETT_KEY | splits auth login --name pett  # saved as "pett", now active

@@ -285,8 +285,10 @@ auth.command("whoami", {
     "whether they came from the environment or the local keystore, and the local EOA signing " +
     "keys saved by browser login, `splits auth create-key`, or `import-key`. For each local key registered " +
     "with the backend, `localKeys[].signerId` is the id needed by " +
-    "`accounts update-signers --add-eoa-signer-ids`; null means the key exists locally but " +
-    "has not been registered (see `auth register-signer`). " +
+    "`accounts update-signers --add-eoa-signer-ids`. This registration id differs from " +
+    "the account-specific id in `accounts signers`, which is used for removals. " +
+    "A null id means the key is unregistered or the signer lookup failed; " +
+    "check `auth signers` before registering it again. " +
     "Also updates the org id and name saved for the workspace, which `auth workspaces` shows.",
   env: authEnv,
   options: workspaceOption,
@@ -324,9 +326,12 @@ auth.command("whoami", {
         signerIdsByAddress = new Map(
           signers.data.map((s) => [s.address.toLowerCase(), s.id]),
         );
-      } catch {
-        // A failed lookup must not fail whoami. The local keys are still
-        // reported, with a null signerId (rate limit, transient 5xx, etc).
+      } catch (error) {
+        // Keep local keys visible when the lookup fails, but distinguish a
+        // failed lookup from a key that has not been registered.
+        process.stderr.write(
+          `Warning: could not look up signer IDs: ${error instanceof Error ? error.message : String(error)}. Run \`splits auth signers\` to check registration.\n`,
+        );
       }
     }
 
@@ -668,7 +673,7 @@ const browserLoginOptions = loginOptions.extend({
     .describe(
       "Saved local key that proves this agent in a browser login, and becomes the treasury signer " +
         "if the person creates a workspace. Without it, the login uses a new key, which is saved " +
-        "under the workspace's name only when the person creates a workspace.",
+        "under the workspace's name after approval, whether the person connects or creates a workspace.",
     ),
   clientName: z
     .string()
@@ -1376,7 +1381,9 @@ accounts.command("chains", {
 accounts.command("signers", {
   description:
     "List passkey and EOA signers (with current threshold) for a subaccount. " +
-    "Returns the signer IDs needed by 'accounts update-signers' to add or remove signers.",
+    "EOA ids here identify signers on this account and are used by " +
+    "`accounts update-signers --remove-eoa-ids`. To add an EOA, use its " +
+    "registration id from `auth signers` or `auth whoami` instead.",
   env: authEnv,
   options: workspaceOption,
   args: z.object({
