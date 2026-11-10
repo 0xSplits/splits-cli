@@ -8,6 +8,7 @@ import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { setTimeout as sleep } from "node:timers/promises";
 import type { ReadableStream as WebReadableStream } from "node:stream/web";
 
 
@@ -44,6 +45,16 @@ export class SplitsApiError extends Error {
 // 30s default — generous for chain-heavy endpoints, short enough that a
 // wedged TCP connection doesn't hang an MCP tool call indefinitely.
 const REQUEST_TIMEOUT_MS = 30_000;
+const RATE_LIMIT_RETRIES = 3;
+
+/** Accept both Retry-After formats and fall back to one second when absent. */
+const retryAfterMs = (header: string | null): number => {
+  if (header === null) return 1_000;
+  const seconds = Number(header);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1_000;
+  const date = Date.parse(header);
+  return Number.isNaN(date) ? 1_000 : Math.max(0, date - Date.now());
+};
 
 type HttpOptions = {
   method?: "GET" | "PUT" | "POST" | "DELETE";
@@ -75,37 +86,79 @@ export async function httpRequest<T = unknown>(
   }
 
   const url = `${credentials.apiUrl}/public/v1${path}`;
+  const method = options.method ?? "GET";
 
-  let res: Response;
-  try {
-    res = await fetch(url, {
-      method: options.method ?? "GET",
-      headers,
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      ...(options.body ? { body: JSON.stringify(options.body) } : {}),
-    });
-  } catch (err) {
-    if (err instanceof Error && err.name === "TimeoutError") {
+  for (let attempt = 0; attempt <= RATE_LIMIT_RETRIES; attempt++) {
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method,
+        headers,
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        ...(options.body ? { body: JSON.stringify(options.body) } : {}),
+      });
+    } catch (err) {
+      if (err instanceof Error && err.name === "TimeoutError") {
+        throw new SplitsApiError(
+          "network-timeout",
+          0,
+          `Request to ${path} timed out after ${REQUEST_TIMEOUT_MS / 1000}s.`,
+        );
+      }
+      throw err;
+    }
+
+    if (res.status === 429) {
+      const body = await res.text();
+      let errObj: { code?: string; message?: string } | undefined;
+      try {
+        errObj = (JSON.parse(body) as { error?: typeof errObj }).error;
+      } catch {
+        // The API's rate-limit middleware returns plain text.
+      }
+      // The API's rate-limit middleware sets Retry-After before a route runs.
+      // Other 429s (for example TOO_MANY_IN_FLIGHT) are application errors.
+      const retryable =
+        res.headers.has("Retry-After") ||
+        (method === "GET" && !errObj?.code);
+      if (retryable && attempt < RATE_LIMIT_RETRIES) {
+        await sleep(
+          retryAfterMs(res.headers.get("Retry-After")) + Math.random() * 100,
+        );
+        continue;
+      }
+      if (!retryable) {
+        throw new SplitsApiError(
+          errObj?.code,
+          429,
+          errObj?.message || body.trim() || "API error: 429",
+        );
+      }
+      const limit =
+        res.headers.get("x-ratelimit-limit") ??
+        res.headers.get("ratelimit-limit");
+      const serverMessage = errObj?.message ?? body.trim();
       throw new SplitsApiError(
-        "network-timeout",
-        0,
-        `Request to ${path} timed out after ${REQUEST_TIMEOUT_MS / 1000}s.`,
+        "rate_limited",
+        429,
+        `Rate limited by the Splits API${limit ? ` (limit: ${limit})` : ""}; ` +
+          `retried ${attempt} times.${serverMessage ? ` ${serverMessage}` : ""}`,
       );
     }
-    throw err;
-  }
 
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    const errObj = (body as { error?: { code?: string; message?: string } })
-      ?.error;
-    throw new SplitsApiError(
-      errObj?.code,
-      res.status,
-      errObj?.message ?? `API error: ${res.status}`,
-    );
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      const errObj = (body as { error?: { code?: string; message?: string } })
+        ?.error;
+      throw new SplitsApiError(
+        errObj?.code,
+        res.status,
+        errObj?.message ?? `API error: ${res.status}`,
+      );
+    }
+    return res.json() as Promise<T>;
   }
-  return res.json() as Promise<T>;
+  throw new Error("Unreachable rate-limit retry state");
 }
 
 // Generated reports are uploaded to the asset host and handed back as a plain
