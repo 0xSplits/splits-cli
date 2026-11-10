@@ -552,6 +552,10 @@ Every tool that calls the API takes an optional `workspace` argument, so one MCP
 - `accounting_imports_create` / `_list` / `_status` — Import an external address and poll its backfill
 - `accounting_recompute_current` / `_job` / `_run` — Track or force the lot recompute that applies assertion writes
 
+## Rate limits
+
+Workspaces on the Base plan can make 1 API request per second across the whole organization. Every plan also has other limits, per IP address and on some routes. A request over any limit fails with HTTP 429, and the error says how long to wait: wait, then retry. Workspaces on the Pro plan are not held to the Base limit. Upgrading is optional. A workspace owner can review Pro (a subscription or a qualifying Earn balance) at <https://app.splits.org/settings/team/upgrade?plan=pro>.
+
 ## Configuration
 
 | Variable | Required | Description |

@@ -41,7 +41,12 @@ import {
   saveWorkspace,
   useWorkspace,
 } from "./config.js";
-import { downloadToFile, httpRequest, SplitsApiError } from "./http.js";
+import {
+  downloadToFile,
+  httpRequest,
+  RATE_LIMIT_NOTE,
+  SplitsApiError,
+} from "./http.js";
 import { PERIODS, resolvePeriod, type Period } from "./periods.js";
 import { bytes32Hash, evmAddress, transactionId } from "./schemas.js";
 import { signMessageLocally, signTransactionLocally } from "./signing.js";
@@ -274,7 +279,7 @@ const resolveDateRange = (options: {
 // =============================================================================
 
 const auth = Cli.create("auth", {
-  description: "Authentication and identity",
+  description: "Authentication and identity. " + RATE_LIMIT_NOTE,
 });
 
 auth.command("whoami", {

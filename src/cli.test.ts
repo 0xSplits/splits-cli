@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { createServer } from "node:http";
+import { createServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import { promisify } from "node:util";
@@ -122,4 +122,101 @@ test("accounts deploy proposes a zero-value call to the account itself", async (
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
+});
+
+const runAgainst = async (
+  respond: (res: ServerResponse) => void,
+  args: string[],
+) => {
+  const server = createServer((_req, res) => respond(res));
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const apiUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    return await execFileAsync(
+      process.execPath,
+      ["--import", "tsx", cliPath, ...args],
+      {
+        env: {
+          ...process.env,
+          SPLITS_API_KEY: "sk_test",
+          SPLITS_API_URL: apiUrl,
+        },
+      },
+    ).then(
+      ({ stdout }) => stdout,
+      (error: Error & { stdout: string }) => error.stdout,
+    );
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+};
+
+test("a 429 is explained, and names the Base plan only on the Base limiter's response", async () => {
+  const html = { "Content-Type": "text/html; charset=utf-8" };
+  const accountsList = (respond: (res: ServerResponse) => void) =>
+    runAgainst(respond, ["accounts", "list"]);
+  const planTalk = /\b(Base|Pro)\b/;
+
+  const base = await accountsList((res) => {
+    res.writeHead(429, {
+      ...html,
+      "Retry-After": "1",
+      "X-RateLimit-Limit": "1",
+      "X-RateLimit-Remaining": "0",
+    });
+    res.end("Too many requests, please try again in a second");
+  });
+  assert.match(base, /Rate limited \(HTTP 429\)/);
+  assert.match(base, /Base plan/);
+  assert.match(base, /Wait 1 second, then retry\./);
+  assert.match(base, /Optional: .*\/settings\/team\/upgrade\?plan=pro/);
+
+  const org = await accountsList((res) => {
+    res.writeHead(429, {
+      ...html,
+      "Retry-After": "1",
+      "X-RateLimit-Limit": "20",
+      "X-RateLimit-Remaining": "0",
+    });
+    res.end("Too many requests, please try again in a few minutes");
+  });
+  assert.match(
+    org,
+    /Rate limited \(HTTP 429\): too many requests\. Wait 1 second, then retry\./,
+  );
+  assert.doesNotMatch(org, planTalk);
+  assert.doesNotMatch(org, /few minutes/);
+
+  const inFlight = await accountsList((res) => {
+    res.writeHead(429, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        error: {
+          code: "TOO_MANY_IN_FLIGHT",
+          message: "Too much work already queued for this organization",
+        },
+      }),
+    );
+  });
+  assert.match(inFlight, /Too much work already queued for this organization/);
+  assert.doesNotMatch(inFlight, /Rate limited/);
+
+  const bare = await accountsList((res) => {
+    res.writeHead(429);
+    res.end();
+  });
+  assert.match(
+    bare,
+    /Rate limited \(HTTP 429\): too many requests\. Wait before retrying\./,
+  );
+  assert.doesNotMatch(bare, planTalk);
+});
+
+test("--llms-full explains the Base limit and where a person can review Pro", async () => {
+  const manifest = await runAgainst(() => {}, ["--llms-full"]);
+  assert.match(manifest, /1 API request per second/);
+  assert.match(
+    manifest,
+    /https:\/\/app\.splits\.org\/settings\/team\/upgrade\?plan=pro/,
+  );
 });
