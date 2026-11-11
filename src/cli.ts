@@ -3493,12 +3493,6 @@ create.command("transfer", {
       .describe(
         "Optional name for the proposal. If omitted, auto-generated from transfer details",
       ),
-    validUntil: z
-      .number()
-      .optional()
-      .describe(
-        "Unix timestamp (seconds) when the proposal expires. Defaults to 7 days from now. Must be in the future and at most 30 days out.",
-      ),
   }),
   async run({ env: processEnv, options }) {
     const env = await withWorkspace(processEnv, options);
@@ -3524,9 +3518,6 @@ create.command("transfer", {
       ...(options.memo !== undefined && { memo: options.memo }),
       ...(properties !== undefined && { properties }),
       ...(options.name !== undefined && { name: options.name }),
-      ...(options.validUntil !== undefined && {
-        validUntil: options.validUntil,
-      }),
     } satisfies Record<string, unknown>;
     return apiRequest<{ data?: unknown }>(env, "/proposals/transfer", {
       method: "POST",
@@ -3970,12 +3961,6 @@ create.command("custom", {
       .describe(
         "Optional name for the proposal. If omitted, auto-generated from call details",
       ),
-    validUntil: z
-      .number()
-      .optional()
-      .describe(
-        "Unix timestamp (seconds) when the proposal expires. Defaults to 7 days from now. Must be in the future and at most 30 days out.",
-      ),
   }),
   async run({ env: processEnv, options }) {
     const env = await withWorkspace(processEnv, options);
@@ -3993,9 +3978,6 @@ create.command("custom", {
       ...(options.memo !== undefined && { memo: options.memo }),
       ...(properties !== undefined && { properties }),
       ...(options.name !== undefined && { name: options.name }),
-      ...(options.validUntil !== undefined && {
-        validUntil: options.validUntil,
-      }),
     } satisfies Record<string, unknown>;
     return apiRequest<{ data?: unknown }>(env, "/proposals/custom", {
       method: "POST",
