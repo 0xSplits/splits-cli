@@ -362,6 +362,7 @@ Reports: `transactions`, `lots`, `lot-timeline`, `realized-gains`, `tokens`, `st
 ```sh
 # Read tax lots, and the assertion history behind one
 splits accounting lots list --page-size 50 --status open
+splits accounting lots list --search <sending-address>
 splits accounting lots list --account-ids <id> --chain-ids 8453 --sort-by costBasis --sort-direction desc
 splits accounting lots assertions <lotId> --limit 50 --cursor <nextCursor>
 ```
