@@ -1985,7 +1985,7 @@ reports.command("generate", {
       .string()
       .optional()
       .describe(
-        "Comma-separated account ids to limit the report to (ids come from 'accounts list', not addresses). Omit for every account. All reports.",
+        "Comma-separated account ids to limit the report to (ids come from 'accounts list', not addresses). Omit for active accounts only; imported, archived, and automation accounts are left out unless passed explicitly. All reports.",
       ),
     chainIds: z
       .string()
@@ -2307,7 +2307,8 @@ const assertionTarget = {
 assertions.command("seed", {
   description:
     "Seed opening inventory: a lot that predates Splits custody. " +
-    "Requires unit price, acquisition time, and quantity together, since a seed materializes the whole lot. " +
+    "Requires unit price, acquisition time, and quantity together. " +
+    "A seed alone creates no lot: the lot appears once 'assertions designate' marks an inbound transfer as drawing from it. " +
     "Quantity is in base units (wei for ETH, 6-decimal units for USDC).",
   env: authEnv,
   options: workspaceOption.extend({
@@ -2456,7 +2457,7 @@ assertions.command("revoke", {
 assertions.command("designate", {
   description:
     "Mark an inbound transfer as drawing from seeded inventory, so it carries basis " +
-    "from the seed instead of opening a fresh lot at the transfer's price.",
+    "from the seed instead of opening a fresh lot at the transfer's price. A seed becomes a lot only once an inbound is designated against it.",
   env: authEnv,
   options: workspaceOption.extend({
     ...assertionTarget,

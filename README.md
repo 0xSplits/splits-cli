@@ -369,6 +369,7 @@ splits accounting lots assertions <lotId> --limit 50 --cursor <nextCursor>
 ```sh
 # Seed opening inventory the org held before Splits (quantity is in base units).
 # --target-key names the lot; rerun with the same key to correct it.
+# The lot appears once an inbound transfer is designated against the seed.
 splits accounting assertions seed --smart-account-id <id> --chain-id 8453 --token-address 0xabc... \
   --unit-price 1500.50 --acquisition-time 2024-03-01 --quantity 1000000 --target-key usdc-opening-2024
 
