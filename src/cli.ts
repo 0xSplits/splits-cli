@@ -2186,7 +2186,7 @@ lots.command("list", {
       .string()
       .optional()
       .describe("Read open inventory as of this instant. ISO 8601. Defaults to now."),
-    search: z.string().optional().describe("Substring search across token symbol and name"),
+    search: z.string().optional().describe("Substring search by sending address"),
     startDate: z
       .string()
       .optional()
