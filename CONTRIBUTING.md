@@ -59,6 +59,14 @@ npm version major && pnpm publish --access public
 
 `npm version` bumps `package.json`, creates a git commit, and tags it. The `prepublishOnly` script runs `pnpm build` automatically before publishing.
 
+### MCP Registry
+
+The MCP server is listed in the [MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.0xSplits/splits-cli`. The listing pins an npm version, so it does not follow new releases on its own. To update it after publishing to npm:
+
+1. Set both `version` fields in `server.json` to the version you just published. Published registry versions can't be edited.
+2. Run `mcp-publisher validate server.json`.
+3. As an 0xSplits org Owner, run `mcp-publisher login github --token <PAT>` with a classic PAT that has `read:org`, then `mcp-publisher publish`.
+
 Preview what will be published:
 
 ```sh

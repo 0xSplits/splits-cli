@@ -1,6 +1,7 @@
 {
   "name": "@splits/splits-cli",
-  "version": "0.6.0",
+  "version": "0.6.1",
+  "mcpName": "io.github.0xSplits/splits-cli",
   "description": "CLI and MCP server for the Splits platform",
   "type": "module",
   "bin": {
