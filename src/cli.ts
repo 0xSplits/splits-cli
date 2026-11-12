@@ -1559,8 +1559,10 @@ const parseTypedData = (
 accounts.command("sign-message", {
   description:
     "Sign a message as the smart account (ERC-1271) with a local EOA saved by " +
-    "`splits auth create-key` or `splits auth import-key`, the way the web app signs " +
-    "WalletConnect and Splits Connect requests. Pass exactly one of --message (plain text, " +
+    "`splits auth create-key` or `splits auth import-key`. This can authorize " +
+    "compatible x402 or MPP payments as well as WalletConnect and Splits Connect " +
+    "requests; the payment method must accept ERC-1271 and package the signature. " +
+    "Pass exactly one of --message (plain text, " +
     "personal_sign), --hex (raw bytes, personal_sign) or --typed-data (EIP-712 JSON), plus " +
     "--chain-id. Creates the message, signs its signingHash, and returns the smart account " +
     "signature once signatureCount reaches threshold. On a multisig the result has " +

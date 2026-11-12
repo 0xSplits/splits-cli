@@ -303,13 +303,14 @@ splits accounts unarchive <address>
 # Rename a subaccount (requires owner-scoped API key)
 splits accounts rename <address> --name "New Name"
 
-# Sign a message as the account (ERC-1271) with your local key, as the web app
-# does for WalletConnect requests. The result carries `signature` once
+# Sign a message as the account (ERC-1271) with your local key. Compatible
+# x402/MPP payment methods can use this as well as WalletConnect. The result
+# carries `signature` once
 # signatureCount reaches threshold; on a multisig, other signers add theirs
 # with --id.
-splits accounts sign-message <address> --chainId 8453 --message "Hello"
-splits accounts sign-message <address> --chainId 8453 --hex 0x68656c6c6f
-splits accounts sign-message <address> --chainId 8453 --typedData '{"domain":{...},"types":{...},"primaryType":"Mail","message":{...}}'
+splits accounts sign-message <address> --chain-id 8453 --message "Hello"
+splits accounts sign-message <address> --chain-id 8453 --hex 0x68656c6c6f
+splits accounts sign-message <address> --chain-id 8453 --typed-data '{"domain":{...},"types":{...},"primaryType":"Mail","message":{...}}'
 splits accounts sign-message <address> --id <message-id>
 
 # Create a subaccount (requires owner-scoped API key)
@@ -338,6 +339,21 @@ splits accounts add-networks --chain-ids 10,42161
 splits accounts remove-networks --chain-ids 42161
 splits accounts remove-networks --chain-ids 42161 --confirm-funds-on-removed-networks
 ```
+
+### Paying x402 and MPP services from an agent account
+
+`accounts sign-message` produces an ERC-1271 **smart-account** signature, not an EOA payment or a complete HTTP payment credential. A payment client must construct the method-specific authorization, insert the returned `data.signature` into that method's payload, encode the credential, and retry the original request. Check the recipient, token, amount, expiry, network, and verifier before signing; never sign arbitrary typed data supplied by an untrusted endpoint without checking its fields.
+
+1. Use a funded, deployed account on the requested network. Run `splits accounts signers <address>` to check its threshold and that your local EOA is a signer. A threshold-1 account gives an immediately usable signature. For a higher threshold, `data.signature` is `null` until other signers run `splits accounts sign-message <address> --id <message-id>`; only send the completed signature.
+2. Make the HTTP request and read its `402` payment requirements. For **x402 v2**, decode `PAYMENT-REQUIRED`, choose an EVM payment option the service and facilitator support, and construct its exact EIP-712 typed data from the chosen scheme's rules (including the advertised network, asset, amount, and payee). For **MPP**, parse `WWW-Authenticate: Payment` and follow the advertised payment method and intent. Do not treat an MPP challenge as an x402 payload.
+3. For a method that accepts ERC-1271 EIP-712 signatures, run `splits accounts sign-message <address> --chain-id <chain-id> --typed-data '<method-specific EIP-712 JSON>'`. The JSON must have `domain`, `types`, `primaryType`, and `message`; use the method's exact domain and fields, rather than the illustrative `Mail` example above. Check that the returned `data.signature` is non-null and use the **smart-account address** as payer. Keep `data.id` if other signers must complete the message.
+4. Put the signature in the method's full payment credential and retry the same request. x402 v2 sends its encoded payment payload in `PAYMENT-SIGNATURE`; MPP normally sends `Authorization: Payment <credential>` (or the alternative header named by its challenge). Neither header accepts the bare `data.signature` as a complete credential. Check the response's settlement result before recording the expense.
+
+**Compatibility depends on the payment method and deployment.** The [x402 wallet compatibility guide](https://docs.x402.org/advanced-concepts/wallet-compatibility) lists deployed smart accounts for EVM `exact` with EIP-3009 or Permit2 when the verifier supports ERC-1271. EIP-3009 also needs the **token contract** to call `isValidSignature` for `transferWithAuthorization`: Circle USDC v2.2 does, while older USDC versions and EOA-only tokens do not. Permit2 supports contract signatures but needs a token allowance first. Check the [x402 network/token list](https://docs.x402.org/core-concepts/network-and-token-support), the token deployment on the selected chain, and the facilitator's supported networks; a chain's presence in that list alone does not prove this account and token combination works. A Splits account may need deployment before a verifier can call `isValidSignature`.
+
+**MPP is method-specific.** Its [credential format](https://mpp.dev/protocol/credentials.md) can carry a signed transaction, transaction hash, or proof; Tempo `charge` is not an EIP-3009 authorization. An EVM MPP method using EIP-3009 or Permit2 may use the typed-data flow above if its verifier and token accept ERC-1271, but `sign-message` cannot create a signed transaction or satisfy every MPP method. Follow the method's documentation before choosing the signing path.
+
+**Bookkeeping:** the external token transfer is indexed as an outbound `assetTransfer` row, not as a Splits-created proposal. After settlement, locate it with `splits transactions list --account <address> --chain-id <chain-id> --transaction-hash <settlement-hash>` (or filter by account, chain, and date if the service provides no hash). Check `assetTransferData` for the token, amount, `from`, and `to`, then set `splits transactions memo <row-id> --memo "Service and request"`. `accounts sign-message` has no `--memo`; signing alone does not create a transfer row. Indexing can lag settlement.
 
 ### Accounting
 
