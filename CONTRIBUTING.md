@@ -57,18 +57,17 @@ npm version minor && pnpm publish --access public
 npm version major && pnpm publish --access public
 ```
 
-`npm version` bumps `package.json`, creates a git commit, and tags it. The `prepublishOnly` script runs `pnpm build` automatically before publishing.
-
-### MCP Registry
-
-The MCP server is listed in the [MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.0xSplits/splits-cli`. The listing pins an npm version, so it does not follow new releases on its own. To update it after publishing to npm:
-
-1. Set both `version` fields in `server.json` to the version you just published. Published registry versions can't be edited.
-2. Run `mcp-publisher validate server.json`.
-3. As an 0xSplits org Owner, run `mcp-publisher login github --token <PAT>` with a classic PAT that has `read:org`, then `mcp-publisher publish`.
+`npm version` bumps `package.json` and the versions in `server.json`, creates a git commit, and tags it. If you bump `package.json` by hand, run `node scripts/server-json-version.mjs --write` as well. The `prepublishOnly` script refuses to publish while `server.json` and `package.json` have different versions, then runs `pnpm build:prod`.
 
 Preview what will be published:
 
 ```sh
 npm pack --dry-run
 ```
+
+### MCP Registry
+
+The MCP server is listed in the [MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.0xSplits/splits-cli`. The listing pins the npm version in `server.json`, so it does not follow new releases on its own. Published registry versions can't be edited. After each npm release:
+
+1. Run `mcp-publisher validate server.json`.
+2. As an 0xSplits org Owner, run `mcp-publisher login github --token <PAT>` with a classic PAT that has `read:org`, then `mcp-publisher publish`.

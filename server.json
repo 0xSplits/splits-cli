@@ -3,7 +3,10 @@
   "name": "io.github.0xSplits/splits-cli",
   "title": "Splits",
   "description": "Give an AI agent its own key on a dedicated Splits account. At threshold 2+, a human co-signs.",
-  "repository": { "url": "https://github.com/0xSplits/splits-cli", "source": "github" },
+  "repository": {
+    "url": "https://github.com/0xSplits/splits-cli",
+    "source": "github"
+  },
   "websiteUrl": "https://splits.org/docs/introduction/agents",
   "version": "0.6.1",
   "packages": [
@@ -12,8 +15,15 @@
       "identifier": "@splits/splits-cli",
       "version": "0.6.1",
       "runtimeHint": "npx",
-      "transport": { "type": "stdio" },
-      "packageArguments": [{ "type": "positional", "value": "--mcp" }],
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "--mcp"
+        }
+      ],
       "environmentVariables": [
         {
           "name": "SPLITS_API_KEY",

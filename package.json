@@ -15,7 +15,8 @@
     "build": "tsc",
     "build:prod": "tsc && node scripts/mark-prod-build.mjs",
     "test": "tsx --test src/*.test.ts",
-    "prepublishOnly": "pnpm build:prod",
+    "version": "node scripts/server-json-version.mjs --write && git add server.json",
+    "prepublishOnly": "node scripts/server-json-version.mjs && pnpm build:prod",
     "release": "npm version patch && pnpm publish --access public"
   },
   "dependencies": {
