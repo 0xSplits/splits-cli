@@ -1,0 +1,45 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.0xSplits/splits-cli",
+  "title": "Splits",
+  "description": "Give an AI agent its own key on a dedicated Splits account. At threshold 2+, a human co-signs.",
+  "repository": {
+    "url": "https://github.com/0xSplits/splits-cli",
+    "source": "github"
+  },
+  "websiteUrl": "https://splits.org/docs/introduction/agents",
+  "version": "0.6.1",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@splits/splits-cli",
+      "version": "0.6.1",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "--mcp"
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "SPLITS_API_KEY",
+          "description": "Splits API key (sk_...) from Splits Settings. Optional: leave unset to log in from the agent through the browser-approval tools (auth_login-start, auth_login-status), which save a workspace locally. When set, it takes precedence over saved workspaces.",
+          "isRequired": false,
+          "isSecret": true,
+          "format": "string"
+        },
+        {
+          "name": "SPLITS_WORKSPACE",
+          "description": "Alias of the saved workspace to use instead of the active one. Optional; cannot be combined with SPLITS_API_KEY.",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "string"
+        }
+      ]
+    }
+  ]
+}

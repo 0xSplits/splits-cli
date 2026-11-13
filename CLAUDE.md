@@ -28,6 +28,8 @@ npm version major && pnpm publish --access public   # major release
 npm pack --dry-run                              # preview published package contents
 ```
 
+`server.json` is the MCP Registry entry and pins the npm version. `npm version` updates it; if you bump `package.json` by hand, also run `node scripts/server-json-version.mjs --write`. `prepublishOnly` refuses to publish while the two differ. After each npm release, an 0xSplits org Owner publishes the new registry version (see `CONTRIBUTING.md`).
+
 There are no lint or typecheck scripts — `pnpm build` (tsc in strict mode) is the only static check. `pnpm test` runs the `src/*.test.ts` unit tests with `node:test` (they are excluded from the build). Commands that hit the API need `SPLITS_API_KEY` or a workspace saved by `splits auth login`.
 
 ## Architecture
