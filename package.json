@@ -3,6 +3,7 @@
   "version": "0.6.1",
   "mcpName": "io.github.0xSplits/splits-cli",
   "description": "CLI and MCP server for the Splits platform",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "splits": "./dist/cli.js"
