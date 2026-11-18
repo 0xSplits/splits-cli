@@ -16,6 +16,12 @@ const hostedPath = fileURLToPath(new URL("./hosted.ts", import.meta.url));
 const mcpPublicUrl = "https://mcp.example.test/mcp";
 const backendDelayMs = 200;
 const reportDownloadUrl = "https://reports.example.test/report-1.csv";
+const backendErrorStatusByToken: Record<string, number> = {
+  "token-expired": 401,
+  "token-forbidden": 403,
+};
+const challenge =
+  'Bearer resource_metadata="https://mcp.example.test/.well-known/oauth-protected-resource"';
 
 const excludedToolNames = [
   "accounting_assertions_bulk",
@@ -65,6 +71,12 @@ before(async () => {
       userAgent: req.headers["user-agent"],
     });
     const { pathname } = new URL(req.url ?? "/", "http://backend");
+    const errorStatus = backendErrorStatusByToken[tokenOf(req.headers.authorization)];
+    if (errorStatus !== undefined) {
+      res.writeHead(errorStatus, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: { code: "REJECTED", message: `status ${errorStatus}` } }));
+      return;
+    }
     if (pathname === "/public/v1/auth/whoami") {
       inFlight += 1;
       maxInFlight = Math.max(maxInFlight, inFlight);
@@ -168,10 +180,7 @@ test("a request without a bearer token gets a 401 that points at the resource me
   });
 
   assert.equal(response.status, 401);
-  assert.equal(
-    response.headers.get("www-authenticate"),
-    'Bearer resource_metadata="https://mcp.example.test/.well-known/oauth-protected-resource"',
-  );
+  assert.equal(response.headers.get("www-authenticate"), challenge);
   assert.equal(backendRequests.length, before);
 });
 
@@ -281,4 +290,39 @@ test("an out path passed to reports generate is dropped, so the report comes bac
   } finally {
     await client.close();
   }
+});
+
+const callWhoamiOverHttp = (token: string): Promise<Response> =>
+  fetch(hostedUrl, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "auth_whoami", arguments: {} },
+    }),
+  });
+
+test("a token the API rejects with 401 gets an HTTP 401 with the same challenge, so the client can refresh it", async () => {
+  const response = await callWhoamiOverHttp("token-expired");
+
+  assert.equal(response.status, 401);
+  assert.equal(response.headers.get("www-authenticate"), challenge);
+});
+
+test("other API errors, such as a 403 for a missing scope, stay tool errors inside an HTTP 200", async () => {
+  const response = await callWhoamiOverHttp("token-forbidden");
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("www-authenticate"), null);
+  const body = (await response.json()) as {
+    result: { isError: boolean; content: Array<{ text: string }> };
+  };
+  assert.equal(body.result.isError, true);
+  assert.match(body.result.content[0].text, /status 403/);
 });

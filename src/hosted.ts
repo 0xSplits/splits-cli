@@ -9,10 +9,11 @@ import { createRequire } from "node:module";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import { Cli, Mcp, z } from "incur";
+import { Cli, Mcp, type MiddlewareHandler, z } from "incur";
 
 import cli from "./cli.js";
 import { hostedCredentials } from "./config.js";
+import { SplitsApiError } from "./http.js";
 
 const DEFAULT_PORT = 3000;
 const MAX_BODY_BYTES = 1_000_000;
@@ -23,6 +24,7 @@ const PROTECTED_RESOURCE_METADATA_PATHS = new Set([
   `${PROTECTED_RESOURCE_METADATA_PATH}${MCP_PATH}`,
 ]);
 const BEARER_TOKEN_PATTERN = /^Bearer\s+(\S+)$/i;
+const UNAUTHORIZED_STATUS = 401;
 
 const EXCLUDED_TOOL_NAMES = new Set([
   "accounting_assertions_bulk",
@@ -80,6 +82,11 @@ const protectedResourceMetadata = JSON.stringify({
   bearer_methods_supported: ["header"],
 });
 const wwwAuthenticate = `Bearer resource_metadata="${new URL(mcpUrl).origin}${PROTECTED_RESOURCE_METADATA_PATH}"`;
+const unauthorizedResponse = (): Response =>
+  new Response(null, {
+    status: UNAUTHORIZED_STATUS,
+    headers: { "WWW-Authenticate": wwwAuthenticate },
+  });
 
 const collectedTools = Mcp.collectTools(Cli.toCommands.get(cli as never)!, []);
 assertAllPresent(
@@ -112,13 +119,29 @@ assertAllPresent(
 );
 
 const handleMcp = async (request: Request): Promise<Response> => {
+  let apiRejectedToken = false;
+  const flagRejectedToken: MiddlewareHandler = async (_context, next) => {
+    try {
+      await next();
+    } catch (error) {
+      if (error instanceof SplitsApiError && error.status === UNAUTHORIZED_STATUS) {
+        apiRejectedToken = true;
+      }
+      throw error;
+    }
+  };
   const server = new McpServer({ name: cli.name, version });
   for (const { tool, inputSchema } of hostedTools) {
     server.registerTool(
       tool.name,
       { description: tool.description, inputSchema },
       (params, extra) =>
-        Mcp.callTool(tool, params, { extra, name: cli.name, version }),
+        Mcp.callTool(tool, params, {
+          extra,
+          name: cli.name,
+          version,
+          middlewares: [flagRejectedToken],
+        }),
     );
   }
   const transport = new WebStandardStreamableHTTPServerTransport({
@@ -126,7 +149,8 @@ const handleMcp = async (request: Request): Promise<Response> => {
     enableJsonResponse: true,
   });
   await server.connect(transport);
-  return transport.handleRequest(request);
+  const response = await transport.handleRequest(request);
+  return apiRejectedToken ? unauthorizedResponse() : response;
 };
 
 const readBody = (req: IncomingMessage): Promise<string | null> =>
@@ -174,7 +198,7 @@ const route = async (req: IncomingMessage, res: ServerResponse): Promise<void> =
 
   const apiKey = req.headers.authorization?.match(BEARER_TOKEN_PATTERN)?.[1];
   if (apiKey === undefined) {
-    res.writeHead(401, { "WWW-Authenticate": wwwAuthenticate }).end();
+    await send(res, unauthorizedResponse());
     return;
   }
 
