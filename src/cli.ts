@@ -4677,7 +4677,8 @@ org.command("create", {
 cli.command(org);
 
 if (
-  process.argv[1] !== undefined &&
+  process.argv[1] === undefined ||
+  !existsSync(process.argv[1]) ||
   realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)
 ) {
   cli.serve();
