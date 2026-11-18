@@ -31,6 +31,7 @@ const excludedToolNames = [
   "auth_register-signer",
   "auth_use",
   "auth_workspaces",
+  "org_create",
   "transactions_sign",
   "workspace_create",
   "workspace_create-agent-owned",
