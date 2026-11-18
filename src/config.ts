@@ -4,6 +4,7 @@
 // signing keys. Keys are not tied to a workspace: one EOA can sign for several
 // orgs.
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { constants as fsConstants, promises as fs } from "node:fs";
 import { homedir } from "node:os";
@@ -21,6 +22,11 @@ const LOCK_PATH = join(CONFIG_DIR, "config.json.lock");
 
 export const CONFIG_FILE_PATH = CONFIG_PATH;
 export const DEFAULT_API_URL = "https://server.production.splits.org";
+
+export const hostedCredentials = new AsyncLocalStorage<{
+  apiKey: string;
+  apiUrl: string;
+}>();
 
 const HEX_ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
 const HEX_PRIVATE_KEY_RE = /^0x[0-9a-f]{64}$/i;
@@ -397,7 +403,7 @@ export type CredentialSource = {
 
 export type ResolvedCredentials = {
   apiKey: string | null;
-  apiKeySource: "env" | "keystore" | null;
+  apiKeySource: "env" | "keystore" | "request" | null;
   apiUrl: string;
   workspace: string | null;
 };
@@ -429,6 +435,16 @@ export const resolveCredentials = async (
   source: CredentialSource,
   { prodBuild = IS_PROD_BUILD }: { prodBuild?: boolean } = {},
 ): Promise<ResolvedCredentials> => {
+  const hosted = hostedCredentials.getStore();
+  if (hosted !== undefined) {
+    return {
+      apiKey: hosted.apiKey,
+      apiKeySource: "request",
+      apiUrl: hosted.apiUrl,
+      workspace: null,
+    };
+  }
+
   const requested =
     nonEmpty(source.workspace) ?? nonEmpty(source.SPLITS_WORKSPACE);
   const envKey = nonEmpty(source.SPLITS_API_KEY);
@@ -505,6 +521,7 @@ export const saveKey = (key: SavedKey): Promise<{ added: boolean }> =>
   });
 
 export const listKeys = async (): Promise<PublicKeyInfo[]> => {
+  if (hostedCredentials.getStore() !== undefined) return [];
   const config = await readConfig();
   return Object.entries(config.keys).map(([address, k]) => ({
     name: k.name,

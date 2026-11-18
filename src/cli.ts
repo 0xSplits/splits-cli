@@ -281,8 +281,8 @@ auth.command("whoami", {
   description:
     "Show the current org, the API key name and scopes, and the user the key acts as. " +
     "`user.kind` is AGENT when the key belongs to an agent. " +
-    "Also reports the workspace the credentials came from (null when SPLITS_API_KEY is set), " +
-    "whether they came from the environment or the local keystore, and the local EOA signing " +
+    "Also reports the workspace the credentials came from (null when SPLITS_API_KEY is set or the key came with the request), " +
+    "whether they came from the environment, the local keystore, or the request to the hosted MCP server, and the local EOA signing " +
     "keys saved by browser login, `splits auth create-key`, or `import-key`. For each local key registered " +
     "with the backend, `localKeys[].signerId` is the id needed by " +
     "`accounts update-signers --add-eoa-signer-ids`. This registration id differs from " +
