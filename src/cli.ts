@@ -1430,7 +1430,7 @@ accounts.command("unarchive", {
 
 accounts.command("rename", {
   description:
-    "Rename a subaccount by address. Name max 255 chars, trimmed. Requires owner-scoped API key.",
+    "Rename a subaccount by address. Name max 255 chars, trimmed. Requires owner-scoped API key, except for an imported account, which any member's write-scoped key can rename.",
   env: authEnv,
   args: z.object({
     address: evmAddress.describe("Account address (0x...)"),
