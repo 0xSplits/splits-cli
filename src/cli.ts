@@ -534,7 +534,8 @@ const agentOwnedNext = ({
   "with it makes them an owner of the workspace. " +
   (hasOtherTreasurySigners
     ? `The local key ${signerAddress} in ${CONFIG_FILE_PATH} is one of the treasury signers. Ask the person ` +
-      "to check every other signer address: Splits never checks them either. Never print, paste or move the key. "
+      "to check every other signer address: Splits never checks them either. Never print, paste or move the key. " +
+      "If it is lost and the other signers cannot meet the threshold, only the recovery email can recover the funds. "
     : `The local key ${signerAddress} in ${CONFIG_FILE_PATH} is the only signer of the treasury. Never print, ` +
       "paste or move it. If it is lost, only the recovery email can recover the funds. ") +
   "Suggest that the person logs in with the recovery email before anyone deposits funds.";
