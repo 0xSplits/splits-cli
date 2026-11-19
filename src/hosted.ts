@@ -162,6 +162,8 @@ const readBody = (req: IncomingMessage): Promise<string | null> =>
     req.on("data", (chunk: Buffer) => {
       size += chunk.length;
       if (size > MAX_BODY_BYTES) {
+        req.removeAllListeners("data");
+        req.pause();
         resolve(null);
         return;
       }
@@ -211,7 +213,7 @@ const route = async (req: IncomingMessage, res: ServerResponse): Promise<void> =
 
   const body = await readBody(req);
   if (body === null) {
-    res.writeHead(413).end();
+    res.writeHead(413, { Connection: "close" }).end(() => req.destroy());
     return;
   }
 
