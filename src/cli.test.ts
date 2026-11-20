@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { readFileSync } from "node:fs";
+import { mkdtemp, rm, symlink } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -214,5 +215,22 @@ test("workspace create-agent-owned sends the treasury signers and threshold", as
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("the CLI runs when it is started through a symlink, as npm installs the bin", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "splits-cli-bin-"));
+  try {
+    const bin = join(dir, "splits");
+    await symlink(cliPath, bin);
+    const { version } = JSON.parse(
+      readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+    ) as { version: string };
+
+    const { stdout } = await execFileAsync(process.execPath, ["--import", "tsx", bin, "--version"]);
+
+    assert.equal(stdout.trim(), version);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
   }
 });

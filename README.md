@@ -581,6 +581,16 @@ Every tool that calls the API takes an optional `workspace` argument, so one MCP
 - `accounting_imports_create` / `_list` / `_status` — Import an external address and poll its backfill
 - `accounting_recompute_current` / `_job` / `_run` — Track or force the lot recompute that applies assertion writes
 
+### Hosted MCP server
+
+`dist/hosted.js` (`pnpm hosted` from source) serves the same tools over Streamable HTTP for remote clients such as ChatGPT. Every request carries its own `Authorization: Bearer <api key>`, and the tools call the API with that key. The server never reads `SPLITS_API_KEY`, a saved workspace, or `~/.splits`. Tools that need the server's disk or a local key are left out (login, workspaces, local signing keys, `transactions_sign`, `accounts_sign-message`, the two `_bulk` file imports, and `org_create`, which emails any address it is given), and so are the `workspace`, `out` and `force` arguments. When the API answers 401 to a request's key (invalid, expired or revoked), the server answers that HTTP request with 401 and the same `WWW-Authenticate` challenge as a request with no key, so an OAuth client refreshes its token. Other API errors, such as 403, 429 and 5xx, come back as tool errors.
+
+```sh
+SPLITS_API_URL=https://server.production.splits.org SPLITS_MCP_URL=https://mcp.example.com/mcp PORT=3000 node dist/hosted.js
+```
+
+`SPLITS_API_URL` is the API the tools call and the OAuth authorization server. `SPLITS_MCP_URL` is the public URL of `/mcp`, which `/.well-known/oauth-protected-resource` names as the protected resource. `PORT` defaults to 3000.
+
 ## Configuration
 
 | Variable | Required | Description |
