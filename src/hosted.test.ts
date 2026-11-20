@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -43,6 +43,86 @@ const excludedToolNames = [
   "workspace_create-agent-owned",
 ];
 const hiddenOptionNames = ["workspace", "out", "force"];
+const servedToolNames = [
+  "accounting_assertions_designate",
+  "accounting_assertions_edit",
+  "accounting_assertions_revoke",
+  "accounting_assertions_seed",
+  "accounting_categories_archive",
+  "accounting_categories_create",
+  "accounting_categories_list",
+  "accounting_categories_update",
+  "accounting_categorize_revoke",
+  "accounting_categorize_set",
+  "accounting_imports_create",
+  "accounting_imports_list",
+  "accounting_imports_status",
+  "accounting_lots_assertions",
+  "accounting_lots_list",
+  "accounting_recompute_current",
+  "accounting_recompute_job",
+  "accounting_recompute_run",
+  "accounting_reports_generate",
+  "accounting_reports_job",
+  "accounting_reports_list",
+  "accounting_rules_create",
+  "accounting_rules_delete",
+  "accounting_rules_list",
+  "accounting_rules_update",
+  "accounts_add-networks",
+  "accounts_archive",
+  "accounts_balances",
+  "accounts_chains",
+  "accounts_create",
+  "accounts_deploy",
+  "accounts_get",
+  "accounts_list",
+  "accounts_networks",
+  "accounts_remove-networks",
+  "accounts_rename",
+  "accounts_signers",
+  "accounts_unarchive",
+  "accounts_update-signers",
+  "auth_signers",
+  "auth_whoami",
+  "automations_create",
+  "automations_list",
+  "chains_get",
+  "chains_list",
+  "contacts_list",
+  "contacts_lookup",
+  "feedback_send",
+  "invoices_create",
+  "invoices_get",
+  "invoices_list",
+  "members_list",
+  "members_signers",
+  "offramp_external-accounts",
+  "settings_get",
+  "tokens_blocklist",
+  "tokens_metadata",
+  "tokens_whitelist",
+  "transactions_cancel",
+  "transactions_create_auto-earn-off",
+  "transactions_create_auto-earn-on",
+  "transactions_create_custom",
+  "transactions_create_earn-deposit",
+  "transactions_create_earn-withdraw",
+  "transactions_create_offramp",
+  "transactions_create_swap",
+  "transactions_create_transfer",
+  "transactions_get",
+  "transactions_list",
+  "transactions_memo",
+  "transactions_properties_clear",
+  "transactions_properties_replace",
+  "transactions_properties_set",
+  "transactions_update-gas-estimation",
+];
+const hostLocalKey = {
+  address: "0x3333333333333333333333333333333333333333",
+  privateKey: `0x${"11".repeat(32)}`,
+};
 
 type BackendRequest = {
   method: string;
@@ -110,6 +190,19 @@ before(async () => {
   await new Promise<void>((resolve) => backend.listen(0, "127.0.0.1", resolve));
 
   home = await mkdtemp(join(tmpdir(), "splits-cli-hosted-"));
+  await mkdir(join(home, ".splits"), { mode: 0o700 });
+  await writeFile(
+    join(home, ".splits", "config.json"),
+    JSON.stringify({
+      version: 2,
+      activeWorkspace: null,
+      workspaces: {},
+      keys: {
+        [hostLocalKey.address]: { name: "host-key", privateKey: hostLocalKey.privateKey },
+      },
+    }),
+    { mode: 0o600 },
+  );
   hosted = spawn(process.execPath, ["--import", "tsx", hostedPath], {
     env: {
       ...process.env,
@@ -207,8 +300,7 @@ test("tools/list leaves out the local-only tools and the server-local options", 
     const { tools } = await client.listTools();
     const names = tools.map((tool) => tool.name);
 
-    assert.ok(names.includes("auth_whoami"));
-    assert.ok(names.includes("accounting_reports_generate"));
+    assert.deepEqual([...names].sort(), servedToolNames);
     for (const excluded of excludedToolNames) {
       assert.ok(!names.includes(excluded), `${excluded} is exposed`);
     }
@@ -325,4 +417,41 @@ test("other API errors, such as a 403 for a missing scope, stay tool errors insi
   };
   assert.equal(body.result.isError, true);
   assert.match(body.result.content[0].text, /status 403/);
+});
+
+const postToMcp = (headers: Record<string, string>, body: string): Promise<Response> =>
+  fetch(hostedUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...headers },
+    body,
+  });
+
+const oversizedBody = "x".repeat(1_000_001);
+
+test("a body over the size limit gets a 413", async () => {
+  const response = await postToMcp({ Authorization: "Bearer token-large" }, oversizedBody);
+
+  assert.equal(response.status, 413);
+});
+
+test("an oversized body with no token gets a 401, so the token check runs before the body is read", async () => {
+  const response = await postToMcp({}, oversizedBody);
+
+  assert.equal(response.status, 401);
+  assert.equal(response.headers.get("www-authenticate"), challenge);
+});
+
+test("a GET on the MCP path gets a 405 that allows only POST", async () => {
+  const response = await fetch(hostedUrl, { headers: { Authorization: "Bearer token-get" } });
+
+  assert.equal(response.status, 405);
+  assert.equal(response.headers.get("allow"), "POST");
+});
+
+test("an unknown path gets a 404", async () => {
+  const response = await fetch(new URL("/other", hostedUrl), {
+    headers: { Authorization: "Bearer token-other" },
+  });
+
+  assert.equal(response.status, 404);
 });

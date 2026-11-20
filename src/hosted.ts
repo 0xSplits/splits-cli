@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// This server uses node:http and not Express. It has only three routes, and the MCP transport takes a Web Request, so a framework would add little.
+// The token check must also run before the body is read, which is hard to guarantee when Express middleware parses the body first.
 import {
   createServer,
   type IncomingMessage,
@@ -160,6 +162,8 @@ const readBody = (req: IncomingMessage): Promise<string | null> =>
     req.on("data", (chunk: Buffer) => {
       size += chunk.length;
       if (size > MAX_BODY_BYTES) {
+        req.removeAllListeners("data");
+        req.pause();
         resolve(null);
         return;
       }
@@ -209,7 +213,7 @@ const route = async (req: IncomingMessage, res: ServerResponse): Promise<void> =
 
   const body = await readBody(req);
   if (body === null) {
-    res.writeHead(413).end();
+    res.writeHead(413, { Connection: "close" }).end(() => req.destroy());
     return;
   }
 
