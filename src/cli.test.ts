@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { mkdtemp, rm, symlink } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -121,5 +125,22 @@ test("accounts deploy proposes a zero-value call to the account itself", async (
     });
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("the CLI runs when it is started through a symlink, as npm installs the bin", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "splits-cli-bin-"));
+  try {
+    const bin = join(dir, "splits");
+    await symlink(cliPath, bin);
+    const { version } = JSON.parse(
+      readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+    ) as { version: string };
+
+    const { stdout } = await execFileAsync(process.execPath, ["--import", "tsx", bin, "--version"]);
+
+    assert.equal(stdout.trim(), version);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
   }
 });

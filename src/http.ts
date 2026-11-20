@@ -10,6 +10,8 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as WebReadableStream } from "node:stream/web";
 
+import { hostedCredentials } from "./config.js";
+
 
 // Build the User-Agent the backend's `detectPublicApiSource` parses to tag
 // transactions with their origin (CLI vs. MCP vs. raw API). Without this
@@ -22,7 +24,8 @@ const { version: PACKAGE_VERSION } = createRequire(import.meta.url)(
 const IS_MCP_MODE =
   process.env.SPLITS_MCP_MODE === "1" || process.argv.includes("--mcp");
 
-const USER_AGENT = `splits-cli/${PACKAGE_VERSION}${IS_MCP_MODE ? " (mcp)" : ""}`;
+const userAgent = (): string =>
+  `splits-cli/${PACKAGE_VERSION}${IS_MCP_MODE || hostedCredentials.getStore() !== undefined ? " (mcp)" : ""}`;
 
 // Typed error thrown by httpRequest so callers (including MCP consumers) can
 // branch on machine-readable backend error codes like SELF_TAKEOVER_BLOCKED,
@@ -59,7 +62,7 @@ export async function httpRequest<T = unknown>(
   options: HttpOptions,
 ): Promise<T> {
 
-  const headers: Record<string, string> = { "User-Agent": USER_AGENT };
+  const headers: Record<string, string> = { "User-Agent": userAgent() };
   if (options.requireAuth) {
     if (credentials.apiKey === null) {
       throw new SplitsApiError(
@@ -128,7 +131,7 @@ export async function downloadToFile(
   let res: Response;
   try {
     res = await fetch(url, {
-      headers: { "User-Agent": USER_AGENT },
+      headers: { "User-Agent": userAgent() },
       signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
     });
   } catch (err) {
