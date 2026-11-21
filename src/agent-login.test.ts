@@ -6,6 +6,7 @@ import {
   type AgentLoginPoll,
   createPkcePair,
   describeCreatedWorkspace,
+  describeOtherTreasurySigners,
   pollIntervalMs,
   resolveLoginInput,
   waitForAgentLogin,
@@ -195,5 +196,58 @@ describe("created workspace diagram", () => {
     });
 
     assert.match(diagram, /Treasury 0x4{40} {2}1 of 1: this agent's key 0x1{40}$/m);
+  });
+});
+
+describe("other treasury signers guidance", () => {
+  const agentKey = "0x1111111111111111111111111111111111111111";
+  const created = {
+    rootAddress: "0x2222222222222222222222222222222222222222",
+    treasuryAddress: "0x4444444444444444444444444444444444444444",
+    chainIds: [8453],
+    recoveryEmail: "ops@acme.com",
+  };
+
+  it("says how each other signer approves, and who approves another agent's login", () => {
+    const guidance = describeOtherTreasurySigners({
+      signerAddress: agentKey,
+      approver: "the person, as an owner,",
+      created: {
+        ...created,
+        treasurySigners: [
+          { address: agentKey, name: "Claude Code" },
+          { address: "0x3333333333333333333333333333333333333333", name: "Judge bot" },
+        ],
+        treasuryThreshold: 2,
+      },
+    });
+
+    assert.match(guidance ?? "", /needs 2 of 2 signatures/);
+    assert.match(guidance ?? "", /Judge bot 0x3{40}/);
+    assert.match(guidance ?? "", /opens its signUrl and connects the wallet/);
+    assert.match(guidance ?? "", /the person, as an owner, approves the login/);
+  });
+
+  it("says nothing when this agent's key is the only treasury signer", () => {
+    assert.equal(
+      describeOtherTreasurySigners({
+        signerAddress: agentKey,
+        approver: "the person, as an owner,",
+        created: {
+          ...created,
+          treasurySigners: [{ address: agentKey, name: "Claude Code" }],
+          treasuryThreshold: 1,
+        },
+      }),
+      null,
+    );
+    assert.equal(
+      describeOtherTreasurySigners({
+        signerAddress: agentKey,
+        approver: "the person, as an owner,",
+        created,
+      }),
+      null,
+    );
   });
 });

@@ -11,9 +11,11 @@ import {
   type AgentLoginGrant,
   type FinishedAgentLogin,
   type CreateWorkspacePrefill,
+  type CreatedWorkspace,
   type TreasuryConfig,
   createAutonomousWorkspace,
   describeCreatedWorkspace,
+  describeOtherTreasurySigners,
   openInBrowser,
   pollAgentLogin,
   resolveLoginInput,
@@ -515,30 +517,56 @@ const runBrowserLogin = async ({
     signerAddress: account.address,
     freshPrivateKey,
   });
+  const next = browserCreateNext({
+    created: saved.created,
+    signerAddress: account.address,
+  });
   if (saved.diagram !== null) process.stderr.write(`${saved.diagram}\n`);
+  if (next !== null) process.stderr.write(`Warning: ${next}\n`);
   warnIfEnvKeySet(env);
-  return { ...saved, signerAddress: account.address };
+  return { ...saved, signerAddress: account.address, ...(next !== null && { next }) };
 };
 
 const agentOwnedNext = ({
-  recoveryEmail,
+  created,
   signerAddress,
-  hasOtherTreasurySigners,
 }: {
-  recoveryEmail: string;
+  created: CreatedWorkspace;
   signerAddress: string;
-  hasOtherTreasurySigners: boolean;
-}): string =>
-  `Tell the person the recovery email is ${recoveryEmail} and ask them to check it. Splits never ` +
-  "checks it, and a wrong address gives a stranger control of the root account. Logging in to Splits " +
-  "with it makes them an owner of the workspace. " +
-  (hasOtherTreasurySigners
-    ? `The local key ${signerAddress} in ${CONFIG_FILE_PATH} is one of the treasury signers. Ask the person ` +
-      "to check every other signer address: Splits never checks them either. Never print, paste or move the key. " +
-      "If it is lost and the other signers cannot meet the threshold, only the recovery email can recover the funds. "
-    : `The local key ${signerAddress} in ${CONFIG_FILE_PATH} is the only signer of the treasury. Never print, ` +
-      "paste or move it. If it is lost, only the recovery email can recover the funds. ") +
-  "Suggest that the person logs in with the recovery email before anyone deposits funds.";
+}): string => {
+  const otherSigners = describeOtherTreasurySigners({
+    created,
+    signerAddress,
+    approver: "the person at the recovery email, after logging in to Splits with it,",
+  });
+  return (
+    `Tell the person the recovery email is ${created.recoveryEmail} and ask them to check it. Splits never ` +
+    "checks it, and a wrong address gives a stranger control of the root account. Logging in to Splits " +
+    "with it makes them an owner of the workspace. " +
+    (otherSigners === null
+      ? `The local key ${signerAddress} in ${CONFIG_FILE_PATH} is the only signer of the treasury. Never print, ` +
+        "paste or move it. If it is lost, only the recovery email can recover the funds. "
+      : `The local key ${signerAddress} in ${CONFIG_FILE_PATH} is one of the treasury signers. Never print, ` +
+        "paste or move it. If it is lost and the other signers cannot meet the threshold, only the recovery " +
+        `email can recover the funds. ${otherSigners} `) +
+    "Suggest that the person logs in with the recovery email before anyone deposits funds."
+  );
+};
+
+const browserCreateNext = ({
+  created,
+  signerAddress,
+}: {
+  created: CreatedWorkspace | null;
+  signerAddress: string;
+}): string | null =>
+  created === null
+    ? null
+    : describeOtherTreasurySigners({
+        created,
+        signerAddress,
+        approver: "the person, as an owner,",
+      });
 
 const runAutonomousCreate = async ({
   env,
@@ -586,9 +614,8 @@ const runAutonomousCreate = async ({
     freshPrivateKey: null,
   });
   const next = agentOwnedNext({
-    recoveryEmail: grant.created.recoveryEmail,
+    created: grant.created,
     signerAddress: account.address,
-    hasOtherTreasurySigners: (grant.created.treasurySigners?.length ?? 1) > 1,
   });
   if (!mcpMode()) {
     if (saved.diagram !== null) process.stderr.write(`${saved.diagram}\n`);
@@ -869,7 +896,16 @@ auth.command("login-status", {
     });
     await removePendingLogin(pending.requestId);
     warnIfEnvKeySet(env);
-    return { status: result.status, requestId: pending.requestId, ...saved };
+    const next = browserCreateNext({
+      created: saved.created,
+      signerAddress: pending.signerAddress,
+    });
+    return {
+      status: result.status,
+      requestId: pending.requestId,
+      ...saved,
+      ...(next !== null && { next }),
+    };
   },
 });
 

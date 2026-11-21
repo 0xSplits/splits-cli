@@ -292,3 +292,27 @@ export const describeCreatedWorkspace = ({
     `Deposit address: ${created.treasuryAddress} (the treasury, same on every chain above)`,
   ].join("\n");
 };
+
+export const describeOtherTreasurySigners = ({
+  created,
+  signerAddress,
+  approver,
+}: {
+  created: CreatedWorkspace;
+  signerAddress: string;
+  approver: string;
+}): string | null => {
+  const others = (created.treasurySigners ?? []).filter(
+    (signer) => signer.address.toLowerCase() !== signerAddress.toLowerCase(),
+  );
+  if (others.length === 0) return null;
+  const names = others.map((signer) => `${signer.name} ${signer.address}`).join(", ");
+  return (
+    `The treasury needs ${created.treasuryThreshold ?? 1} of ${others.length + 1} signatures, this agent's key ` +
+    `included. Splits never checked who controls the other signers (${names}): ask the person to confirm ` +
+    "each address before anyone deposits funds. To approve a pending transaction, a person opens its signUrl " +
+    "and connects the wallet with that address. Another agent signs with `transactions sign` from its own CLI, " +
+    "which needs its own API key for this workspace: it runs `auth login-start --key <its address>` from the " +
+    `CLI that holds that key, and ${approver} approves the login in the browser.`
+  );
+};
