@@ -8,11 +8,15 @@ const SLOW_POLL_MS = 5_000;
 const FAST_POLL_WINDOW_MS = 60_000;
 const VERIFIER_BYTES = 32;
 
+type TreasurySigner = { address: string; name: string };
+
 export type CreatedWorkspace = {
   rootAddress: string;
   treasuryAddress: string;
   chainIds: number[];
   recoveryEmail: string;
+  treasurySigners?: TreasurySigner[];
+  treasuryThreshold?: number;
 };
 
 export type AgentLoginGrant = {
@@ -40,7 +44,16 @@ export type StartedAgentLogin = {
   codeVerifier: string;
 };
 
-export type CreateWorkspacePrefill = { name: string; chainIds?: number[] };
+export type TreasuryConfig = {
+  additionalSigners: TreasurySigner[];
+  threshold: number;
+};
+
+export type CreateWorkspacePrefill = {
+  name: string;
+  chainIds?: number[];
+  treasury?: TreasuryConfig;
+};
 
 type MessageSigner = {
   address: `0x${string}`;
@@ -262,10 +275,44 @@ export const describeCreatedWorkspace = ({
   orgName: string;
   created: CreatedWorkspace;
   signerAddress: string;
-}): string =>
-  [
+}): string => {
+  const signers = created.treasurySigners ?? [{ address: signerAddress, name: "" }];
+  const threshold = created.treasuryThreshold ?? 1;
+  const treasurySigners = signers
+    .map((signer) =>
+      signer.address.toLowerCase() === signerAddress.toLowerCase()
+        ? `this agent's key ${signer.address}`
+        : `${signer.name} ${signer.address}`,
+    )
+    .join(", ");
+  return [
     `${orgName} (chains ${created.chainIds.join(", ")})`,
     `└─ Root ${created.rootAddress}  1 of 1: ${created.recoveryEmail} (recovery)`,
-    `   └─ Treasury ${created.treasuryAddress}  1 of 1: this agent's key ${signerAddress}`,
+    `   └─ Treasury ${created.treasuryAddress}  ${threshold} of ${signers.length}: ${treasurySigners}`,
     `Deposit address: ${created.treasuryAddress} (the treasury, same on every chain above)`,
   ].join("\n");
+};
+
+export const describeOtherTreasurySigners = ({
+  created,
+  signerAddress,
+  approver,
+}: {
+  created: CreatedWorkspace;
+  signerAddress: string;
+  approver: string;
+}): string | null => {
+  const others = (created.treasurySigners ?? []).filter(
+    (signer) => signer.address.toLowerCase() !== signerAddress.toLowerCase(),
+  );
+  if (others.length === 0) return null;
+  const names = others.map((signer) => `${signer.name} ${signer.address}`).join(", ");
+  return (
+    `The treasury needs ${created.treasuryThreshold ?? 1} of ${others.length + 1} signatures, this agent's key ` +
+    `included. Splits never checked who controls the other signers (${names}): ask the person to confirm ` +
+    "each address before anyone deposits funds. To approve a pending transaction, a person opens its signUrl " +
+    "and connects the wallet with that address. Another agent signs with `transactions sign` from its own CLI, " +
+    "which needs its own API key for this workspace: it runs `auth login-start --key <its address>` from the " +
+    `CLI that holds that key, and ${approver} approves the login in the browser.`
+  );
+};

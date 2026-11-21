@@ -41,7 +41,16 @@ splits auth login-status                              # waits for the approval, 
 splits workspace create --name "Acme" --chain-ids 8453,1 --client-name "Claude Code"
 ```
 
-The same browser login, with the approval page opened on its create tab and prefilled with the name and chains (`--chain-ids` defaults to the chains a new workspace gets in the app). The person approves as the owner. Their login email is the only signer of the root account, which owns the treasury; this CLI's local key is the only signer of the treasury, which is the deposit address on every chosen chain. The key is saved as a new active workspace and a diagram of the accounts is printed. Under MCP the tool returns the approval URL and the code without waiting; `auth login-status` then waits for the approval and saves the workspace.
+The same browser login, with the approval page opened on its create tab and prefilled with the name and chains (`--chain-ids` defaults to the chains a new workspace gets in the app). The person approves as the owner. Their login email is the only signer of the root account, which owns the treasury; this CLI's local key signs the treasury, which is the deposit address on every chosen chain. The key is saved as a new active workspace and a diagram of the accounts is printed. Under MCP the tool returns the approval URL and the code without waiting; `auth login-status` then waits for the approval and saves the workspace.
+
+To give the treasury more signers, such as the person's wallets or other agents, list them with the threshold:
+
+```sh
+splits workspace create --name "Acme" --client-name "Claude Code" \
+  --treasury-signers "0x3333...3333:Judge bot,0x4444...4444:Ledger" --treasury-threshold 2
+```
+
+`--treasury-signers` takes comma-separated `address:name` pairs next to this CLI's key, and `--treasury-threshold` counts that key. The approval page shows the signers, the person cannot change them, and Splits does not check who controls the addresses. `create-agent-owned` takes the same two options.
 
 **Workspace owned by the agent**, with no person approving:
 
@@ -49,7 +58,7 @@ The same browser login, with the approval page opened on its create tab and pref
 splits workspace create-agent-owned --name "Acme" --client-name "Claude Code" --recovery-email ops@acme.com
 ```
 
-Use it only when the person asked for a workspace the agent owns, or when no person can approve; otherwise use `workspace create`. No browser opens and no code is needed. The workspace is created at once, the agent is its only owner and its API key has every scope. The recovery email is the only signer of the root account, through an email wallet, and this CLI's local key is the only signer of the treasury. The person at the recovery email becomes an owner of the workspace when they log in to Splits with it, and can recover it from there. Splits sends no email to the address and does not check it, so use an address the person gave you. The new local key is saved before the call. A key creates one workspace and gets its API key once: running the command again with the same `--key` is refused, and a new API key for that workspace needs a browser login (`auth login-start --key <address>`) that an owner approves. Off-ramp and paid plans need a person, so they stay unavailable until the person joins. The result carries a warning, in `next` and on stderr, for the agent to relay: check the recovery email and log in with it before anyone deposits, and never print, paste or move the local key.
+Use it only when the person asked for a workspace the agent owns, or when no person can approve; otherwise use `workspace create`. No browser opens and no code is needed. The workspace is created at once, the agent is its only owner and its API key has every scope. The recovery email is the only signer of the root account, through an email wallet, and this CLI's local key is the only signer of the treasury unless you pass `--treasury-signers`. The person at the recovery email becomes an owner of the workspace when they log in to Splits with it, and can recover it from there. Splits sends no email to the address and does not check it, so use an address the person gave you. The new local key is saved before the call. A key creates one workspace and gets its API key once: running the command again with the same `--key` is refused, and a new API key for that workspace needs a browser login (`auth login-start --key <address>`) that an owner approves. Off-ramp and paid plans need a person, so they stay unavailable until the person joins. The result carries a warning, in `next` and on stderr, for the agent to relay: check the recovery email and log in with it before anyone deposits, and never print, paste or move the local key.
 
 Or bring an API key from [Splits Settings](https://app.splits.org/settings/team/api-keys/). Two options:
 
