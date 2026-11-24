@@ -300,7 +300,7 @@ splits accounts archive <address>
 # Unarchive a subaccount (requires owner-scoped API key)
 splits accounts unarchive <address>
 
-# Rename a subaccount (requires owner-scoped API key)
+# Rename a subaccount (requires owner-scoped API key; any member can rename an imported account)
 splits accounts rename <address> --name "New Name"
 
 # Sign a message as the account (ERC-1271) with your local key. Compatible
