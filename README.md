@@ -125,18 +125,24 @@ splits accounts update-signers <account> --add-eoa-signer-ids <id>
 
 Registration is idempotent: re-running `register-signer` with the same address returns the same id (and preserves the first name).
 
-Once the EOA is attached to the account's signer set, sign pending multisig transactions:
+Once the EOA is attached to the account's signer set, sign pending multisig transactions. Signing takes two steps, so the signer sees the calls before signing them:
 
 ```sh
-# Auto-submit when this signature meets threshold (default)
+# 1. Signs nothing. Fails with CALLS_HASH_REQUIRED and prints the raw calls
+#    (per network for a multi-network proposal) and their callsHash.
 splits transactions sign <transaction-id>
 
+# 2. After checking the calls, sign them. Auto-submits when this signature meets threshold (default)
+splits transactions sign <transaction-id> --calls-hash <callsHash>
+
 # Record the signature without submitting the UserOp
-splits transactions sign <transaction-id> --no-submit
+splits transactions sign <transaction-id> --calls-hash <callsHash> --no-submit
 
 # Pick the local key when several are saved
-splits transactions sign <transaction-id> --key <address>
+splits transactions sign <transaction-id> --calls-hash <callsHash> --key <address>
 ```
+
+`callsHash` is `keccak256(abi.encode((uint256 chainId, (address to, uint256 value, bytes data)[] calls)[]))` over every network's calls, sorted by `chainId`. With `--calls-hash`, the CLI fetches the transaction again, recomputes the hash from the calls the API returns, and signs only when it matches both the flag and the API's own `callsHash`. It refuses with `CALLS_HASH_MISMATCH` when the calls changed since you reviewed them, with `SERVER_CALLS_HASH_MISMATCH` when the API's `callsHash` disagrees with its calls, and with `CALLS_NOT_EXPOSED` when the API does not return the calls. The `callsHash` covers the calls only, so a gas re-estimation that rotates the `signingHash` does not change it. Over MCP, `transactions_sign` takes the same value as `callsHash`, and the refusal's error text carries the calls and the hash.
 
 Signer and network change proposals (`accounts update-signers`, `accounts add-networks`) sign the same way and execute on every network at once. On a multisig, the last signer runs `transactions update-gas-estimation <id>` first.
 
@@ -157,9 +163,11 @@ splits transactions get <id>
 # when one signer remains: it rotates the signingHash the last signer signs.
 splits transactions update-gas-estimation <id>
 
-# Sign a pending multisig transaction with the local EOA
+# Sign a pending multisig transaction with the local EOA. The first run
+# signs nothing and prints the calls and their callsHash to pass back.
 splits transactions sign <id>
-splits transactions sign <id> --no-submit
+splits transactions sign <id> --calls-hash <callsHash>
+splits transactions sign <id> --calls-hash <callsHash> --no-submit
 
 # Shallow-merge custom JSON metadata onto an existing transaction
 splits transactions properties set <id> \
@@ -272,7 +280,7 @@ Each row also has a `dataType` and one object with the details for that kind:
 | `merkleTransaction` | `merkleTransactionData` | `chainIds`, `types`, `source`, timestamps, and `chainTransactions`: one entry per network with its `status`, hashes and `transactionData` |
 | `assetTransfer` | `assetTransferData` | `assetType`, `tokenAddress`, `tokenId`, `tokenSymbol`, `tokenDecimals`, `amount` (base units), `usdValue`, `from`, `to`, `onrampSourceName` |
 
-A proposal that runs on several networks, such as a signer change, has a null top-level `chainId`, `transactionHash` and `userOpHash`. Read each network's values from `merkleTransactionData.chainTransactions`. `splits transactions get` returns the same item shape, and the `transactions create` commands return these fields for the proposal they create. Older API versions return rows without these fields.
+A proposal that runs on several networks, such as a signer change, has a null top-level `chainId`, `transactionHash` and `userOpHash`. Read each network's values from `merkleTransactionData.chainTransactions`. `splits transactions get` returns the same item shape, plus `signingHash`, `callsHash` and the raw calls (`transactionData.calls`, or each network's in `merkleTransactionData.chainTransactions`), and the `transactions create` commands return these fields for the proposal they create. Older API versions return rows without these fields.
 
 `--period` is mutually exclusive with `--start-date` / `--end-date`. Valid period values: `thisWeek`, `thisMonth`, `thisYear`, `lastWeek`, `lastMonth`, `lastYear`, `last30Days`, `last90Days`, `last6Months`.
 
@@ -324,7 +332,7 @@ splits accounts create --name "Bots" --eoaAddresses 0xabc...,0xdef...        --t
 # Deploy an existing account on an enabled network with a zero-value self-call.
 # This creates a proposal; sign it to execute the deployment. No token transfer is needed.
 splits accounts deploy <address> --chain-id 8453
-splits transactions sign <proposal-id>  # Or approve the returned signUrl in the web app.
+splits transactions sign <proposal-id>  # Prints the calls and callsHash; then add --calls-hash <callsHash>. Or approve the returned signUrl in the web app.
 
 # List the networks enabled on the org, and any network addition still pending
 splits accounts networks

@@ -3163,7 +3163,9 @@ transactions.command("list", {
 
 transactions.command("get", {
   description:
-    "Get details for a specific transaction. The item has the same shape as a 'transactions list' row, including dataType and its matching transactionData, merkleTransactionData or assetTransferData object.",
+    "Get details for a specific transaction. The item has the same shape as a 'transactions list' row, including dataType and its matching transactionData, merkleTransactionData or assetTransferData object. " +
+    "It also carries signingHash and callsHash, and transactionData.calls (each network's in merkleTransactionData.chainTransactions) lists the raw calls { to, value, data } that callsHash commits to. " +
+    "'transactions sign --calls-hash' takes that callsHash.",
   env: authEnv,
   options: workspaceOption,
   args: z.object({
@@ -4019,8 +4021,14 @@ transactions.command("sign", {
     "Sign a pending multisig transaction with a local EOA saved by " +
     "`splits auth create-key` or `splits auth import-key`. " +
     "Pass --key when several local keys are saved; with one it is used by default. " +
-    "Fetches the transaction's signingHash, produces a personal_sign signature locally, " +
-    "and submits it via POST /public/v1/transactions/:id/sign. " +
+    "Signing takes two steps. Run it first without --calls-hash: it signs nothing, fails with CALLS_HASH_REQUIRED, " +
+    "and its error carries the transaction's raw calls (per network for a multi-network proposal) and their callsHash. " +
+    "Check that the calls are what you expect, then run it again with --calls-hash <callsHash>. " +
+    "It then recomputes the digest from the calls the API returns, refuses with CALLS_HASH_MISMATCH when they changed " +
+    "and with SERVER_CALLS_HASH_MISMATCH when the API's callsHash disagrees with its calls, " +
+    "then produces a personal_sign signature of the signingHash locally " +
+    "and submits it via PUT /public/v1/transactions/:id/sign. " +
+    "A transaction whose calls the API does not return is refused with CALLS_NOT_EXPOSED. " +
     "By default auto-submits the UserOp when this signature meets threshold; " +
     "pass --no-submit to record only. Retries once on a stale signer nonce. " +
     "A signer or network change proposal ('accounts update-signers', 'accounts add-networks') submits on every network at once. " +
@@ -4042,12 +4050,18 @@ transactions.command("sign", {
       .describe(
         "Address of the local key to sign with. Required when several local keys are saved.",
       ),
+    callsHash: bytes32Hash
+      .optional()
+      .describe(
+        "The callsHash of the calls you reviewed, from the CALLS_HASH_REQUIRED error of a first run without it. Nothing is signed without it.",
+      ),
   }),
   async run({ env: processEnv, args, options }) {
     const env = await withWorkspace(processEnv, options);
     return signTransactionLocally(env, args.id, {
       submit: !options.noSubmit,
       keyAddress: options.key,
+      callsHash: options.callsHash,
     });
   },
 });

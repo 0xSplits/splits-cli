@@ -6,7 +6,7 @@ export const evmAddress = z
 
 export const transactionId = z.string().uuid("Invalid transaction ID");
 
-// 32-byte (bytes32) hex hashes used for transactionHash and userOpHash.
+// 32-byte (bytes32) hex hashes used for transactionHash, userOpHash and callsHash.
 // Canonical lowercase form is what viem produces; the API also lowercases on
 // input, so callers can pass either casing here.
 export const bytes32Hash = z
