@@ -128,6 +128,96 @@ test("accounts deploy proposes a zero-value call to the account itself", async (
   }
 });
 
+test("workspace create-agent-owned sends the treasury signers and threshold", async () => {
+  const bodiesByPath: Record<string, unknown[]> = {};
+  const judge = "0x3333333333333333333333333333333333333333";
+  const server = createServer(async (req, res) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const path = req.url ?? "";
+    bodiesByPath[path] = [
+      ...(bodiesByPath[path] ?? []),
+      chunks.length > 0 ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : null,
+    ];
+    res.writeHead(200, { "Content-Type": "application/json" });
+    if (path === "/public/v1/workspaces/challenge") {
+      res.end(JSON.stringify({ data: { nonce: `0x${"00".repeat(32)}`, message: "Sign in" } }));
+      return;
+    }
+    if (path === "/public/v1/workspaces") {
+      res.end(
+        JSON.stringify({
+          data: {
+            apiKey: "sk_test",
+            orgId: "org-1",
+            orgName: "Acme",
+            scopes: ["read", "write", "owner"],
+            created: {
+              rootAddress: account,
+              treasuryAddress: call.to,
+              chainIds: [8453],
+              recoveryEmail: "ops@acme.com",
+            },
+          },
+        }),
+      );
+      return;
+    }
+    res.end(JSON.stringify({ data: { user: null } }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const home = await mkdtemp(join(tmpdir(), "splits-cli-test-"));
+
+  try {
+    const apiUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const run = (treasuryOptions: string[]) =>
+      execFileAsync(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          cliPath,
+          "workspace",
+          "create-agent-owned",
+          "--name",
+          "Acme",
+          "--recovery-email",
+          "ops@acme.com",
+          "--client-name",
+          "Claude Code",
+          "--api-url",
+          apiUrl,
+          ...treasuryOptions,
+        ],
+        { env: { ...process.env, HOME: home } },
+      );
+
+    await assert.rejects(
+      run(["--treasury-signers", `${judge}:Judge bot`]),
+      (error: Error & { stdout: string }) => {
+        assert.match(error.stdout, /--treasury-signers needs --treasury-threshold/);
+        return true;
+      },
+    );
+    assert.equal(bodiesByPath["/public/v1/workspaces"], undefined);
+
+    await run(["--treasury-signers", `${judge}:Judge bot`, "--treasury-threshold", "2"]);
+    const [created] = bodiesByPath["/public/v1/workspaces"] as Array<{
+      workspace: unknown;
+    }>;
+    assert.deepEqual(created.workspace, {
+      name: "Acme",
+      treasury: {
+        additionalSigners: [{ address: judge, name: "Judge bot" }],
+        threshold: 2,
+      },
+    });
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
 test("the CLI runs when it is started through a symlink, as npm installs the bin", async () => {
   const dir = await mkdtemp(join(tmpdir(), "splits-cli-bin-"));
   try {

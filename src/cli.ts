@@ -11,8 +11,11 @@ import {
   type AgentLoginGrant,
   type FinishedAgentLogin,
   type CreateWorkspacePrefill,
+  type CreatedWorkspace,
+  type TreasuryConfig,
   createAutonomousWorkspace,
   describeCreatedWorkspace,
+  describeOtherTreasurySigners,
   openInBrowser,
   pollAgentLogin,
   resolveLoginInput,
@@ -514,24 +517,56 @@ const runBrowserLogin = async ({
     signerAddress: account.address,
     freshPrivateKey,
   });
+  const next = browserCreateNext({
+    created: saved.created,
+    signerAddress: account.address,
+  });
   if (saved.diagram !== null) process.stderr.write(`${saved.diagram}\n`);
+  if (next !== null) process.stderr.write(`Warning: ${next}\n`);
   warnIfEnvKeySet(env);
-  return { ...saved, signerAddress: account.address };
+  return { ...saved, signerAddress: account.address, ...(next !== null && { next }) };
 };
 
 const agentOwnedNext = ({
-  recoveryEmail,
+  created,
   signerAddress,
 }: {
-  recoveryEmail: string;
+  created: CreatedWorkspace;
   signerAddress: string;
-}): string =>
-  `Tell the person the recovery email is ${recoveryEmail} and ask them to check it. Splits never ` +
-  "checks it, and a wrong address gives a stranger control of the root account. Logging in to Splits " +
-  "with it makes them an owner of the workspace. " +
-  `The local key ${signerAddress} in ${CONFIG_FILE_PATH} is the only signer of the treasury. Never print, ` +
-  "paste or move it. If it is lost, only the recovery email can recover the funds. " +
-  "Suggest that the person logs in with the recovery email before anyone deposits funds.";
+}): string => {
+  const otherSigners = describeOtherTreasurySigners({
+    created,
+    signerAddress,
+    approver: "the person at the recovery email, after logging in to Splits with it,",
+  });
+  return (
+    `Tell the person the recovery email is ${created.recoveryEmail} and ask them to check it. Splits never ` +
+    "checks it, and a wrong address gives a stranger control of the root account. Logging in to Splits " +
+    "with it makes them an owner of the workspace. " +
+    (otherSigners === null
+      ? `The local key ${signerAddress} in ${CONFIG_FILE_PATH} is the only signer of the treasury. Never print, ` +
+        "paste or move it. If it is lost, only the recovery email can recover the funds. "
+      : `The local key ${signerAddress} in ${CONFIG_FILE_PATH} is one of the treasury signers. Never print, ` +
+        "paste or move it. If it is lost and the other signers cannot meet the threshold, only the recovery " +
+        `email can recover the funds. ${otherSigners} `) +
+    "Suggest that the person logs in with the recovery email before anyone deposits funds."
+  );
+};
+
+const browserCreateNext = ({
+  created,
+  signerAddress,
+}: {
+  created: CreatedWorkspace | null;
+  signerAddress: string;
+}): string | null =>
+  created === null
+    ? null
+    : describeOtherTreasurySigners({
+        created,
+        signerAddress,
+        approver: "the person, as an owner,",
+      });
 
 const runAutonomousCreate = async ({
   env,
@@ -579,7 +614,7 @@ const runAutonomousCreate = async ({
     freshPrivateKey: null,
   });
   const next = agentOwnedNext({
-    recoveryEmail: grant.created.recoveryEmail,
+    created: grant.created,
     signerAddress: account.address,
   });
   if (!mcpMode()) {
@@ -861,7 +896,16 @@ auth.command("login-status", {
     });
     await removePendingLogin(pending.requestId);
     warnIfEnvKeySet(env);
-    return { status: result.status, requestId: pending.requestId, ...saved };
+    const next = browserCreateNext({
+      created: saved.created,
+      signerAddress: pending.signerAddress,
+    });
+    return {
+      status: result.status,
+      requestId: pending.requestId,
+      ...saved,
+      ...(next !== null && { next }),
+    };
   },
 });
 
@@ -1164,7 +1208,62 @@ const workspaceInputOptions = z.object({
     .describe(
       "Comma-separated chain ids to prefill (e.g. '8453,1'). Defaults to the chains a new workspace gets in the app.",
     ),
+  treasurySigners: z
+    .string()
+    .optional()
+    .describe(
+      "Other treasury signers next to this agent's key, as comma-separated address:name pairs " +
+        "(e.g. '0xabc...:Judge bot,0xdef...:Ledger'). Only addresses the person gave you; never make one up. " +
+        "Splits does not check who controls them. Requires --treasury-threshold. Without it, this agent's key " +
+        "is the only treasury signer.",
+    ),
+  treasuryThreshold: z
+    .number()
+    .int()
+    .min(1)
+    .optional()
+    .describe(
+      "Treasury signatures needed to move funds, counting this agent's key. Only with --treasury-signers.",
+    ),
 });
+
+const parseTreasurySigners = (csv: string): TreasuryConfig["additionalSigners"] => {
+  const signers = splitCsv(csv).map((pair) => {
+    const separator = pair.indexOf(":");
+    const address = separator === -1 ? pair : pair.slice(0, separator).trim();
+    const name = separator === -1 ? "" : pair.slice(separator + 1).trim();
+    if (!EVM_ADDRESS_RE.test(address) || name.length === 0) {
+      throw new Error(
+        `--treasury-signers takes comma-separated address:name pairs (invalid: ${pair}).`,
+      );
+    }
+    return { address, name };
+  });
+  if (signers.length === 0) {
+    throw new Error("--treasury-signers must name at least one signer.");
+  }
+  return signers;
+};
+
+const toTreasuryConfig = (
+  options: z.infer<typeof workspaceInputOptions>,
+): TreasuryConfig | undefined => {
+  if (options.treasurySigners === undefined) {
+    if (options.treasuryThreshold !== undefined) {
+      throw new Error("--treasury-threshold needs --treasury-signers.");
+    }
+    return undefined;
+  }
+  if (options.treasuryThreshold === undefined) {
+    throw new Error(
+      "--treasury-signers needs --treasury-threshold: the signatures needed to move funds, counting this agent's key.",
+    );
+  }
+  return {
+    additionalSigners: parseTreasurySigners(options.treasurySigners),
+    threshold: options.treasuryThreshold,
+  };
+};
 
 const toWorkspaceInput = (
   options: z.infer<typeof workspaceInputOptions>,
@@ -1172,6 +1271,7 @@ const toWorkspaceInput = (
   name: options.name,
   chainIds:
     options.chainIds === undefined ? undefined : parseChainIds(options.chainIds),
+  treasury: toTreasuryConfig(options),
 });
 
 workspace.command("create", {
@@ -1181,8 +1281,11 @@ workspace.command("create", {
     "on its create tab, prefilled with the name and chains; the person logs in, can change them, and " +
     "approves. The person becomes the workspace's owner. Two accounts are created, at the same " +
     "address on every chosen chain: the root, whose only signer is the person's login email and which " +
-    "owns the treasury, so the person can always recover it; and the treasury, whose only signer is " +
+    "owns the treasury, so the person can always recover it; and the treasury, whose signer is " +
     "this agent's local key, and which is the workspace's deposit address. " +
+    "To give the treasury more signers, such as the person's wallets or other agents, pass " +
+    "--treasury-signers with the addresses the person gave and --treasury-threshold. The page shows them, " +
+    "the person cannot change them, and Splits does not check who controls them. " +
     "The person can also connect an existing workspace instead. On approval the API key is saved as a " +
     "new workspace and made active; the key never appears in the output. " +
     "The person must enter a code on the page. Outside MCP the command prints the code, waits up to " +
@@ -1221,8 +1324,9 @@ workspace.command("create-agent-owned", {
     "it is faster; when a person is in the conversation and did not ask for it, use `workspace create`. " +
     "recoveryEmail is required and must be the email the person gave; never make one up. It is the only " +
     "signer of the root account, which owns the treasury, and whoever logs in to Splits with it becomes an " +
-    "owner of the workspace. Splits sends it no email and does not verify it. This agent's local key is the " +
-    "only signer of the treasury, the deposit address on every chosen chain. A new local key is saved before " +
+    "owner of the workspace. Splits sends it no email and does not verify it. This agent's local key signs " +
+    "the treasury, the deposit address on every chosen chain, next to any --treasury-signers, which Splits " +
+    "does not verify either. A new local key is saved before " +
     "the call. A key creates one workspace and gets its API key once: a second call with the same key is " +
     "refused, and a new API key for that workspace needs a browser login (`auth login-start`) that an owner " +
     "approves. The API key is saved as a new active workspace and never appears in the output. Off-ramp and " +
