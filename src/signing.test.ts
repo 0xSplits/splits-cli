@@ -128,6 +128,7 @@ beforeEach(() => {
 const sign = (callsHash: string | undefined) =>
   signTransactionLocally({ apiKey: "sk_test", apiUrl }, txId, {
     submit: false,
+    keyAddress: KEY.address,
     callsHash,
   });
 
@@ -168,7 +169,11 @@ describe("transactions sign", () => {
     ]);
 
     await rejectsWithCode(sign(undefined), "CALLS_HASH_REQUIRED", (message) => {
-      assert.ok(message.includes(`--calls-hash ${expected}`));
+      assert.ok(
+        message.includes(
+          `--calls-hash ${expected} --no-submit --key ${KEY.address}`,
+        ),
+      );
       const payload = JSON.parse(message.slice(message.indexOf("{"))) as unknown;
       assert.deepEqual(payload, {
         transactionId: txId,

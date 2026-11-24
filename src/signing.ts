@@ -206,12 +206,20 @@ const assertCallsAcknowledged = ({
   txId,
   acknowledgedCallsHash,
   signable,
+  submit,
+  keyAddress,
 }: {
   txId: string;
   acknowledgedCallsHash: string | undefined;
   signable: SignableTransaction;
+  submit: boolean;
+  keyAddress: string | undefined;
 }) => {
-  const signCommand = `splits transactions sign ${txId} --calls-hash ${signable.callsHash}`;
+  const signCommand = [
+    `splits transactions sign ${txId} --calls-hash ${signable.callsHash}`,
+    ...(submit ? [] : ["--no-submit"]),
+    ...(keyAddress === undefined ? [] : [`--key ${keyAddress}`]),
+  ].join(" ");
   if (acknowledgedCallsHash === undefined) {
     throw new Errors.IncurError({
       code: "CALLS_HASH_REQUIRED",
@@ -237,13 +245,23 @@ const fetchAcknowledgedSigningHash = async ({
   env,
   txId,
   acknowledgedCallsHash,
+  submit,
+  keyAddress,
 }: {
   env: Credentials;
   txId: string;
   acknowledgedCallsHash: string | undefined;
+  submit: boolean;
+  keyAddress: string | undefined;
 }): Promise<`0x${string}`> => {
   const signable = await fetchSignableTransaction(env, txId);
-  assertCallsAcknowledged({ txId, acknowledgedCallsHash, signable });
+  assertCallsAcknowledged({
+    txId,
+    acknowledgedCallsHash,
+    signable,
+    submit,
+    keyAddress,
+  });
   return signable.signingHash;
 };
 
@@ -297,6 +315,8 @@ export async function signTransactionLocally(
       env,
       txId,
       acknowledgedCallsHash: opts.callsHash,
+      submit: opts.submit,
+      keyAddress: opts.keyAddress,
     });
 
   const signingHash = await fetchSigningHash();
