@@ -134,9 +134,12 @@ splits accounts update-signers <account> --add-eoa-signer-ids <id>
 
 Registration is idempotent: re-running `register-signer` with the same address returns the same id (and preserves the first name).
 
-Once the EOA is attached to the account's signer set, sign pending multisig transactions:
+Once the EOA is attached to the account's signer set, sign pending multisig transactions. Read the calls first: `calls` is what the signature authorizes, while the title, metadata and recipients are written by whoever proposed the transaction.
 
 ```sh
+# Review the exact calls (to, value, data, decoded function and args) before signing
+splits transactions get <transaction-id>
+
 # Auto-submit when this signature meets threshold (default)
 splits transactions sign <transaction-id>
 

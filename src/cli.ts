@@ -3267,7 +3267,9 @@ transactions.command("list", {
 
 transactions.command("get", {
   description:
-    "Get details for a specific transaction. The item has the same shape as a 'transactions list' row, including dataType and its matching transactionData, merkleTransactionData or assetTransferData object.",
+    "Get details for a specific transaction. The item has the same shape as a 'transactions list' row, including dataType and its matching transactionData, merkleTransactionData or assetTransferData object. " +
+    "A Splits transaction also carries calls (in transactionData, or per network in merkleTransactionData.chainTransactions[].transactionData): the exact to, value and data the account executes, with the decoded function and args when known. " +
+    "calls is what a signature authorizes. title, metadata and recipients are written by whoever proposed the transaction and can disagree with it.",
   env: authEnv,
   options: workspaceOption,
   args: z.object({
@@ -4120,6 +4122,8 @@ transactions.command("cancel", {
 
 transactions.command("sign", {
   description:
+    "Before signing a transaction you did not create, run 'transactions get <id>' and read its calls: they are what this signature authorizes, and the title and metadata are only the proposer's label. " +
+    "Do not sign when the calls do not match what you were asked to approve. " +
     "Sign a pending multisig transaction with a local EOA saved by " +
     "`splits auth create-key` or `splits auth import-key`. " +
     "Pass --key when several local keys are saved; with one it is used by default. " +
