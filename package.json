@@ -1,6 +1,6 @@
 {
   "name": "@splits/splits-cli",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "mcpName": "io.github.0xSplits/splits-cli",
   "description": "CLI and MCP server for the Splits platform",
   "license": "MIT",
